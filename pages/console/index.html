@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>哈基米音乐控制台</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <main class="hm-wrap">
+      <header class="hm-header">
+        <div class="hm-header__icon" aria-hidden="true">
+          <img src="./assets/logo.svg" alt="" width="36" height="36" />
+        </div>
+        <div>
+          <h1 class="hm-title" id="page-title">哈基米音乐控制台</h1>
+          <p class="hm-subtitle" id="page-desc">运行状态、常用配置与配额管理</p>
+        </div>
+      </header>
+
+      <div class="hm-toast" id="toast" role="status" aria-live="polite"></div>
+
+      <!-- ① 运行状态 -->
+      <section class="hm-card">
+        <div class="hm-card__hero" aria-hidden="true"></div>
+        <div class="hm-card__head">
+          <span class="hm-status__icon" aria-hidden="true">◉</span>
+          <h2 class="hm-card__title" id="title-status">运行状态</h2>
+          <button class="hm-btn hm-btn--ghost" id="btn-refresh-status" type="button">刷新</button>
+        </div>
+        <dl class="hm-list" id="status-list">
+          <div class="hm-empty">正在读取…</div>
+        </dl>
+        <details class="hm-details">
+          <summary>全部风格池规模</summary>
+          <div class="hm-chips" id="pool-chips"></div>
+        </details>
+      </section>
+
+      <!-- ② 常用配置 -->
+      <section class="hm-card">
+        <div class="hm-card__head">
+          <span class="hm-status__icon" aria-hidden="true">⚙</span>
+          <h2 class="hm-card__title" id="title-config">常用配置</h2>
+        </div>
+        <div class="hm-grid">
+          <label class="hm-field">
+            <span class="hm-field__label">下载音质</span>
+            <select class="hm-input" id="cfg-audio-quality">
+              <option value="192k">192K（默认）</option>
+              <option value="132k">132K</option>
+              <option value="64k">64K</option>
+              <option value="flac">Hi-Res 无损（需大会员）</option>
+            </select>
+          </label>
+          <label class="hm-field">
+            <span class="hm-field__label">发送档位</span>
+            <select class="hm-input" id="cfg-vocal-preset">
+              <option value="high">高（44.1kHz / 128k）</option>
+              <option value="standard">标准（24kHz / 64k）</option>
+              <option value="lite">省流（16kHz / 32k）</option>
+            </select>
+          </label>
+          <label class="hm-field">
+            <span class="hm-field__label">总榜池前 N 名</span>
+            <input class="hm-input" id="cfg-top-n" type="number" min="1" max="20000" />
+          </label>
+          <label class="hm-field">
+            <span class="hm-field__label">总榜权重</span>
+            <input class="hm-input" id="cfg-top-weight" type="number" min="0" />
+          </label>
+          <label class="hm-field">
+            <span class="hm-field__label">每风格权重</span>
+            <input class="hm-input" id="cfg-style-weight" type="number" min="0" />
+          </label>
+          <label class="hm-field">
+            <span class="hm-field__label">榜单刷新（小时）</span>
+            <input class="hm-input" id="cfg-rank-hours" type="number" min="0" />
+          </label>
+          <label class="hm-field">
+            <span class="hm-field__label">用户冷却（秒）</span>
+            <input class="hm-input" id="cfg-user-cooldown" type="number" min="0" />
+          </label>
+          <label class="hm-field">
+            <span class="hm-field__label">群日配额</span>
+            <input class="hm-input" id="cfg-group-daily" type="number" min="0" />
+          </label>
+        </div>
+        <div class="hm-actions">
+          <button class="hm-btn hm-btn--primary" id="btn-save-config" type="button">保存配置</button>
+        </div>
+      </section>
+
+      <!-- ③ 配额管理 -->
+      <section class="hm-card">
+        <div class="hm-card__head">
+          <span class="hm-status__icon" aria-hidden="true">▤</span>
+          <h2 class="hm-card__title" id="title-quota">配额管理</h2>
+          <span class="hm-badge" id="quota-date">—</span>
+        </div>
+        <input class="hm-input hm-input--full" id="quota-filter" type="search" placeholder="输入群号或 QQ 号筛选…" />
+        <div class="hm-quota">
+          <div class="hm-quota__col">
+            <div class="hm-quota__head">
+              <label class="hm-check"><input type="checkbox" id="check-all-groups" /> <span>群聊配额</span></label>
+            </div>
+            <div class="hm-quota__list" id="quota-groups"><div class="hm-empty">暂无记录</div></div>
+          </div>
+          <div class="hm-quota__col">
+            <div class="hm-quota__head">
+              <label class="hm-check"><input type="checkbox" id="check-all-users" /> <span>个人配额</span></label>
+            </div>
+            <div class="hm-quota__list" id="quota-users"><div class="hm-empty">暂无记录</div></div>
+          </div>
+        </div>
+        <div class="hm-actions">
+          <button class="hm-btn" id="btn-reset-selected" type="button">重置选中</button>
+          <button class="hm-btn hm-btn--danger" id="btn-reset-all" type="button">重置全部</button>
+        </div>
+        <div class="hm-manual">
+          <span class="hm-field__label">手动重置</span>
+          <div class="hm-manual__row">
+            <input class="hm-input" id="manual-ids" placeholder="群号 / QQ号，多个用逗号分隔" />
+            <select class="hm-input hm-input--narrow" id="manual-scope">
+              <option value="groups">按群号</option>
+              <option value="users">按 QQ 号</option>
+            </select>
+            <button class="hm-btn" id="btn-reset-manual" type="button">重置</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ④ 操作 -->
+      <section class="hm-card">
+        <div class="hm-card__head">
+          <span class="hm-status__icon" aria-hidden="true">✦</span>
+          <h2 class="hm-card__title" id="title-actions">操作</h2>
+        </div>
+        <div class="hm-actions">
+          <button class="hm-btn" id="btn-rank-refresh" type="button">手动刷新榜单</button>
+          <button class="hm-btn hm-btn--danger" id="btn-cache-clear" type="button">清空音频缓存</button>
+          <button class="hm-btn hm-btn--primary" id="btn-bili-login" type="button">发起 B站 扫码登录</button>
+        </div>
+        <div class="hm-qr" id="qr-panel" hidden>
+          <img id="qr-image" alt="B站 登录二维码" />
+          <div class="hm-qr__side">
+            <p class="hm-qr__tip">用 B站 App 扫码，180 秒内有效。</p>
+            <a class="hm-link" id="qr-link" href="#" target="_blank" rel="noreferrer">或在浏览器打开登录链接</a>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
