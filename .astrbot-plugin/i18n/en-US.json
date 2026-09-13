@@ -1,0 +1,13 @@
+{
+  "metadata": {
+    "display_name": "Hachimitsu Music",
+    "short_desc": "Request a song in chat and get the whole Bilibili track as a voice message",
+    "desc": "Request songs from the hajihami.com Bilibili play-count chart and receive the audio as a voice message in chat.\n\n· /哈基米 - pick a random track (chart pool plus five style pools, weighted)\n· /哈基米 <keyword> - fuzzy search, up to 5 results, reply with an index to play\n· /哈基米 帮助 - usage help\n· /哈基米状态 - runtime status (administrators only)\n\nAudio is pulled from Bilibili and transcoded to a compact mp3. No login required; configuring a Cookie with a premium membership unlocks Hi-Res tracks."
+  },
+  "pages": {
+    "console": {
+      "title": "Hachimitsu Music Console",
+      "description": "Runtime status, common settings and quota management"
+    }
+  }
+}

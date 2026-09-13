@@ -1,0 +1,179 @@
+{
+  "enabled": {
+    "description": "启用点歌",
+    "type": "bool",
+    "default": true,
+    "hint": "关闭后 /哈基米 不再响应任何请求。"
+  },
+  "audio_quality": {
+    "description": "下载音质",
+    "type": "string",
+    "options": ["192k", "132k", "64k", "flac"],
+    "labels": ["192K（默认）", "132K", "64K", "Hi-Res 无损（需大会员）"],
+    "default": "192k",
+    "hint": "选择从 B站 下载哪条源音轨。选 flac 需要配置带大会员的 Cookie；未检测到大会员时会自动降级到 192K，不会报错。"
+  },
+  "vocal_preset": {
+    "description": "发送音质档位",
+    "type": "string",
+    "options": ["high", "standard", "lite"],
+    "labels": ["高（44.1kHz / 128k）", "标准（24kHz / 64k）", "省流（16kHz / 32k）"],
+    "default": "standard",
+    "hint": "发给 QQ 的语音编码档位。标准档 24kHz 正好是腾讯 silk 的原生采样率，兼容性最好、体积约 1MB/首。"
+  },
+  "random": {
+    "description": "随机与榜单",
+    "type": "object",
+    "hint": "控制 /哈基米 随机取歌的来源分布与榜单刷新周期。",
+    "items": {
+      "top_n": {
+        "description": "总榜随机池范围",
+        "type": "int",
+        "default": 1000,
+        "hint": "随机时只从榜单前 N 名里抽。默认 1000。"
+      },
+      "top_weight": {
+        "description": "总榜权重",
+        "type": "int",
+        "default": 50,
+        "hint": "与「每风格权重」共同决定概率。默认总榜 50 / 每个风格池 10，即总榜 50%、五个风格池各 10%。"
+      },
+      "style_weight": {
+        "description": "每风格权重",
+        "type": "int",
+        "default": 10,
+        "hint": "每个风格池（曼波好听～ / 冰🧊！ / 哈基周金曲 / 原教旨主义 / 婉约派）各自的权重。"
+      },
+      "rank_refresh_hours": {
+        "description": "榜单刷新周期（小时）",
+        "type": "int",
+        "default": 24,
+        "hint": "每隔多少小时从 Notion 全量拉取一次榜单。调小可以让新歌更快进池，但请求量按比例增加（24 → 约 6 次/天）。"
+      }
+    }
+  },
+  "bili": {
+    "description": "B站账号",
+    "type": "object",
+    "hint": "不填 Cookie 也能正常使用，只是音质上限为 192K、且无法获取 Hi-Res 无损音轨。",
+    "items": {
+      "cookie": {
+        "description": "B站 Cookie",
+        "type": "string",
+        "default": "",
+        "secret": true,
+        "hint": "可选。填入 SESSDATA=xxx; bili_jct=xxx; DedeUserID=xxx 形式的 Cookie 后可使用大会员音轨。留空则以匿名方式请求。"
+      },
+      "enable_admin_assist": {
+        "description": "允许请求管理员协助登录",
+        "type": "bool",
+        "default": true,
+        "hint": "Cookie 失效时私聊管理员，由管理员扫码完成续期。关闭则失效后直接回退到匿名模式。"
+      },
+      "admin_ids": {
+        "description": "管理员 QQ 号",
+        "type": "list",
+        "default": [],
+        "hint": "接收协助请求、以及可以使用「状态」命令的 QQ 号。填写纯数字，一行一个。"
+      },
+      "admin_request_cooldown_minutes": {
+        "description": "协助请求冷却（分钟）",
+        "type": "int",
+        "default": 30,
+        "hint": "两次向管理员发起续期请求之间的最短间隔，避免反复打扰。"
+      }
+    }
+  },
+  "limit": {
+    "description": "限流与队列",
+    "type": "object",
+    "hint": "防止刷屏与滥用的四层闸门参数。所有拦截都会明确回复原因和剩余等待秒数。",
+    "items": {
+      "user_cooldown_seconds": {
+        "description": "用户冷却（秒）",
+        "type": "int",
+        "default": 30,
+        "hint": "同一个用户两次点歌之间的最短间隔。"
+      },
+      "group_cooldown_seconds": {
+        "description": "群冷却（秒）",
+        "type": "int",
+        "default": 10,
+        "hint": "同一个群两次点歌之间的最短间隔。"
+      },
+      "user_daily_limit": {
+        "description": "用户日配额（首）",
+        "type": "int",
+        "default": 20,
+        "hint": "单个用户每天最多点歌数量，每天 0 点重置。"
+      },
+      "group_daily_limit": {
+        "description": "群日配额（首）",
+        "type": "int",
+        "default": 100,
+        "hint": "单个群每天最多点歌数量，每天 0 点重置。"
+      },
+      "global_per_minute": {
+        "description": "全局每分钟上限（首）",
+        "type": "int",
+        "default": 10,
+        "hint": "所有群合计每分钟最多处理多少首。"
+      },
+      "max_concurrency": {
+        "description": "最大并发数",
+        "type": "int",
+        "default": 2,
+        "hint": "同时处理的点歌任务数上限。建议 2~3。"
+      },
+      "queue_max": {
+        "description": "队列上限",
+        "type": "int",
+        "default": 20,
+        "hint": "等待队列的最大长度，超出后直接提示稍后再试。"
+      },
+      "task_timeout_seconds": {
+        "description": "单任务超时（秒）",
+        "type": "int",
+        "default": 30,
+        "hint": "单个点歌任务从开始到发出的最长耗时，超时中断并提示失败。"
+      },
+      "dedup_window_seconds": {
+        "description": "同曲去重窗口（秒）",
+        "type": "int",
+        "default": 300,
+        "hint": "同一首歌在多少秒内被再次点播时直接复用缓存，不重复请求也不占配额。"
+      },
+      "cache_max_mb": {
+        "description": "音频缓存上限（MB）",
+        "type": "int",
+        "default": 2048,
+        "hint": "音频文件的 LRU 缓存体积上限，超出后按最久未使用淘汰。"
+      }
+    }
+  },
+  "access": {
+    "description": "接入控制",
+    "type": "object",
+    "hint": "默认全部留空即为不限制。",
+    "items": {
+      "group_allowlist": {
+        "description": "群白名单",
+        "type": "list",
+        "default": [],
+        "hint": "填写后只有列表内的群可以使用，留空表示不启用白名单。"
+      },
+      "group_blocklist": {
+        "description": "群黑名单",
+        "type": "list",
+        "default": [],
+        "hint": "列表内的群禁止使用。白名单非空时以白名单为准。"
+      },
+      "user_blocklist": {
+        "description": "用户黑名单",
+        "type": "list",
+        "default": [],
+        "hint": "列表内的 QQ 号禁止使用。"
+      }
+    }
+  }
+}

@@ -1,0 +1,554 @@
+/* ============================================================================
+   哈基米音乐控制台样式
+   分段：① 变量 → ② 基础重置 → ③ 组件 → ④ 布局 → ⑤ 页面
+   主题：颜色全部走变量，暗色只覆盖变量，不动组件规则。
+   AstrBot 会把当前主题同步到 <html data-theme="light|dark">（「跟随系统」
+   时也会给出明确的 light/dark），所以这里只写一套组件样式。
+   ============================================================================ */
+
+/* ---------------------------------------------------------------- ① 变量 */
+:root {
+  /* 颜色 */
+  --c-bg: #f5f6f8;
+  --c-surface: #ffffff;
+  --c-surface-2: #f2f3f5;
+  --c-border: rgba(20, 22, 26, 0.1);
+  --c-text: #1f2328;
+  --c-text-dim: #6b7280;
+  --c-primary: #e8761a;
+  --c-primary-weak: rgba(232, 118, 26, 0.12);
+  --c-primary-text: #ffffff;
+  --c-danger: #cf3b3b;
+  --c-danger-weak: rgba(207, 59, 59, 0.12);
+  --c-ok: #1f9d55;
+  --c-warn: #b8860b;
+
+  /* 间距 */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+
+  /* 圆角 / 阴影 */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --shadow-1: 0 1px 2px rgba(16, 18, 22, 0.06);
+  --shadow-2: 0 4px 14px rgba(16, 18, 22, 0.08);
+
+  /* 字号 */
+  --fs-xs: 12px;
+  --fs-sm: 13px;
+  --fs-md: 14px;
+  --fs-lg: 16px;
+  --fs-xl: 20px;
+
+  /* 控件 */
+  --control-h: 32px;
+
+  /* 图片插槽（后续美化用） */
+  --img-hero: none;
+}
+
+[data-theme="dark"] {
+  --c-bg: #16181c;
+  --c-surface: #1e2126;
+  --c-surface-2: #262a30;
+  --c-border: rgba(255, 255, 255, 0.12);
+  --c-text: #e6e8eb;
+  --c-text-dim: #9aa2ad;
+  --c-primary: #f08a3c;
+  --c-primary-weak: rgba(240, 138, 60, 0.16);
+  --c-primary-text: #1a1c20;
+  --c-danger: #e05c5c;
+  --c-danger-weak: rgba(224, 92, 92, 0.16);
+  --c-ok: #3fb96f;
+  --c-warn: #d0a03a;
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-2: 0 4px 14px rgba(0, 0, 0, 0.45);
+}
+
+/* 页面单独在浏览器打开时（没有 bridge 注入）跟随系统 */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --c-bg: #16181c;
+    --c-surface: #1e2126;
+    --c-surface-2: #262a30;
+    --c-border: rgba(255, 255, 255, 0.12);
+    --c-text: #e6e8eb;
+    --c-text-dim: #9aa2ad;
+    --c-primary: #f08a3c;
+    --c-primary-weak: rgba(240, 138, 60, 0.16);
+    --c-primary-text: #1a1c20;
+    --c-danger: #e05c5c;
+    --c-danger-weak: rgba(224, 92, 92, 0.16);
+    --c-ok: #3fb96f;
+    --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow-2: 0 4px 14px rgba(0, 0, 0, 0.45);
+  }
+}
+
+/* ---------------------------------------------------------- ② 基础重置 */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--c-bg);
+  color: var(--c-text);
+  font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC",
+    "Microsoft YaHei", sans-serif;
+  font-size: var(--fs-md);
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3,
+p,
+dl,
+dd,
+dt {
+  margin: 0;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+}
+
+/* ------------------------------------------------------------ ③ 组件 */
+
+/* 卡片 */
+.hm-card {
+  position: relative;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-5);
+  box-shadow: var(--shadow-1);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+/* 预留：卡片顶部视觉插槽（后续放主题图） */
+.hm-card__hero {
+  display: none;
+  background-image: var(--img-hero);
+  background-size: cover;
+  background-position: center;
+  border-radius: var(--radius-md);
+  height: 96px;
+}
+
+.hm-card__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.hm-card__title {
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  flex: 1;
+}
+
+.hm-status__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-sm);
+  background: var(--c-primary-weak);
+  color: var(--c-primary);
+  font-size: var(--fs-xs);
+}
+
+/* 标签型列表 */
+.hm-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.hm-list > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-2) 0;
+  border-bottom: 1px dashed var(--c-border);
+}
+
+.hm-list > div:last-child {
+  border-bottom: none;
+}
+
+.hm-list dt,
+.hm-field__label {
+  color: var(--c-text-dim);
+  font-size: var(--fs-sm);
+  white-space: nowrap;
+}
+
+.hm-list dd {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  word-break: break-all;
+}
+
+/* 表单 */
+.hm-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.hm-input {
+  height: var(--control-h);
+  min-width: 0;
+  padding: 0 var(--space-3);
+  color: var(--c-text);
+  background: var(--c-surface-2);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-sm);
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+
+.hm-input:focus {
+  border-color: var(--c-primary);
+}
+
+.hm-input--full {
+  width: 100%;
+}
+
+.hm-input--narrow {
+  width: 120px;
+  flex: 0 0 auto;
+}
+
+.hm-field .hm-input,
+.hm-field select.hm-input {
+  width: 160px;
+  flex: 0 0 auto;
+}
+
+/* 按钮 */
+.hm-btn {
+  height: var(--control-h);
+  padding: 0 var(--space-4);
+  background: var(--c-surface-2);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
+  white-space: nowrap;
+}
+
+.hm-btn:hover:not(:disabled) {
+  border-color: var(--c-primary);
+  color: var(--c-primary);
+}
+
+.hm-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.hm-btn--primary {
+  background: var(--c-primary);
+  border-color: var(--c-primary);
+  color: var(--c-primary-text);
+}
+
+.hm-btn--primary:hover:not(:disabled) {
+  color: var(--c-primary-text);
+  opacity: 0.9;
+}
+
+.hm-btn--danger {
+  color: var(--c-danger);
+  border-color: var(--c-danger);
+  background: var(--c-danger-weak);
+}
+
+.hm-btn--danger:hover:not(:disabled) {
+  color: var(--c-danger);
+  border-color: var(--c-danger);
+}
+
+.hm-btn--ghost {
+  background: transparent;
+}
+
+/* 徽标 / 提示 */
+.hm-badge {
+  padding: 2px var(--space-2);
+  border-radius: 999px;
+  background: var(--c-surface-2);
+  color: var(--c-text-dim);
+  font-size: var(--fs-xs);
+}
+
+.hm-empty {
+  color: var(--c-text-dim);
+  font-size: var(--fs-sm);
+  padding: var(--space-3) 0;
+}
+
+.hm-link {
+  color: var(--c-primary);
+  font-size: var(--fs-sm);
+  word-break: break-all;
+}
+
+.hm-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding-top: var(--space-2);
+}
+
+.hm-chip {
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--c-surface-2);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.hm-chip--zero {
+  color: var(--c-danger);
+  background: var(--c-danger-weak);
+}
+
+/* 配额勾选列表 */
+.hm-check {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+.hm-quota__list {
+  max-height: 240px;
+  overflow-y: auto;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.hm-quota-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: 3px var(--space-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-sm);
+}
+
+.hm-quota-item:hover {
+  background: var(--c-surface-2);
+}
+
+.hm-quota-item__use {
+  color: var(--c-text-dim);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.hm-quota-item__use--full {
+  color: var(--c-danger);
+}
+
+/* 反馈条 */
+.hm-toast {
+  display: none;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--c-border);
+  background: var(--c-surface);
+  font-size: var(--fs-sm);
+}
+
+.hm-toast[data-kind="ok"] {
+  border-color: var(--c-ok);
+  color: var(--c-ok);
+}
+
+.hm-toast[data-kind="err"] {
+  border-color: var(--c-danger);
+  color: var(--c-danger);
+}
+
+.hm-toast[data-kind="busy"] {
+  border-color: var(--c-primary);
+  color: var(--c-primary);
+}
+
+.hm-toast[data-show="1"] {
+  display: block;
+}
+
+/* 二维码面板 */
+.hm-qr {
+  display: flex;
+  gap: var(--space-4);
+  align-items: flex-start;
+  padding: var(--space-4);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+  background: var(--c-surface-2);
+}
+
+.hm-qr[hidden] {
+  display: none;
+}
+
+.hm-qr img {
+  width: 168px;
+  height: 168px;
+  border-radius: var(--radius-sm);
+  background: #fff;
+}
+
+.hm-qr__side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.hm-qr__tip {
+  font-size: var(--fs-sm);
+  color: var(--c-text-dim);
+}
+
+.hm-details summary {
+  cursor: pointer;
+  color: var(--c-text-dim);
+  font-size: var(--fs-sm);
+}
+
+/* ---------------------------------------------------------- ④ 布局 */
+.hm-wrap {
+  max-width: 920px;
+  margin: 0 auto;
+  padding: var(--space-6) var(--space-4) var(--space-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.hm-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: var(--space-3) var(--space-5);
+}
+
+.hm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.hm-quota {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: var(--space-4);
+}
+
+.hm-quota__col {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.hm-quota__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.hm-manual {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-top: var(--space-3);
+  border-top: 1px dashed var(--c-border);
+}
+
+.hm-manual__row {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.hm-manual__row .hm-input {
+  flex: 1 1 200px;
+}
+
+/* ---------------------------------------------------------- ⑤ 页面 */
+.hm-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.hm-header__icon img {
+  display: block;
+  border-radius: var(--radius-sm);
+}
+
+.hm-title {
+  font-size: var(--fs-xl);
+  font-weight: 600;
+}
+
+.hm-subtitle {
+  color: var(--c-text-dim);
+  font-size: var(--fs-sm);
+}
+
+@media (max-width: 560px) {
+  .hm-field {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--space-1);
+  }
+
+  .hm-field .hm-input,
+  .hm-field select.hm-input,
+  .hm-input--narrow {
+    width: 100%;
+  }
+
+  .hm-actions {
+    justify-content: stretch;
+  }
+
+  .hm-actions .hm-btn {
+    flex: 1 1 auto;
+  }
+}
