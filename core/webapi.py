@@ -18,6 +18,7 @@ import base64
 import io
 
 from .constants import LOG_PREFIX, PLUGIN_NAME, VOCAL_PRESETS
+from .cookie_assist import CookieAssistError
 from .utils import humanize_ago, humanize_size, logger
 
 # 可在 WebUI 里直接改的配置项（其余走 _conf_schema.json）
@@ -48,6 +49,7 @@ class WebAPI:
             (f"{base}/rank/refresh", self.api_rank_refresh, ["POST"], "手动刷新榜单"),
             (f"{base}/cache/clear", self.api_cache_clear, ["POST"], "清空音频缓存"),
             (f"{base}/bili/login", self.api_bili_login, ["POST"], "发起 B站 扫码登录"),
+            (f"{base}/bili/request", self.api_bili_request, ["POST"], "向管理员发起 B站 登录请求"),
         ]
         for route, handler, methods, desc in specs:
             context.register_web_api(route, handler, methods, desc)
@@ -60,9 +62,16 @@ class WebAPI:
 
         plugin = self._plugin
         stats = plugin.rank.stats()
-        auth = plugin.auth.state_snapshot
         guard = plugin.guard.stats()
         cache_bytes = plugin.fetcher.size_bytes()
+        # 自助刷新：被标脏（mark_invalid → checked_at=0）或 Cookie 变了才会真正请求
+        # B站 nav；命中缓存时 refresh() 直接返回，不会额外发网络请求，所以放在这里是安全的。
+        # 否则「管理员在私聊里扫码登录成功」后，WebUI 会一直停在旧的「未登录」快照。
+        auth = plugin.auth.state_snapshot
+        try:
+            auth = await plugin.auth.refresh(plugin.bili)
+        except Exception as exc:  # noqa: BLE001 - 状态接口不该因为校验异常而挂掉
+            logger.debug("%s 状态接口刷新 Cookie 校验失败（%s）", LOG_PREFIX, exc)
 
         return json_response(
             {
@@ -82,6 +91,7 @@ class WebAPI:
                     "uname": auth.uname,
                     "source": auth.source,
                     "reason": auth.reason,
+                    "login_success_count": plugin.cookie_assistant.login_success_count,
                 },
                 "quality": {
                     "download": plugin.config.get("audio_quality", "192k"),
@@ -173,6 +183,10 @@ class WebAPI:
             return error_response(f"配置保存失败：{exc}")
 
         plugin.guard.reload_config(plugin.config)
+        # 配置变更后立即使 Cookie 校验缓存失效，下次校验会重新确认状态
+        # （也顺带触发「删配置即登出」对账：配置 Cookie 清空时清掉依附它的扫码缓存）
+        plugin.auth.reload_config(plugin.config)
+        plugin.auth.mark_invalid("配置已保存，下次校验将重新确认 Cookie 状态")
         logger.info("%s 配置已通过控制台更新 —— %s", LOG_PREFIX, "，".join(changed))
         return json_response({"changed": changed})
 
@@ -271,11 +285,33 @@ class WebAPI:
             }
         )
 
+    async def api_bili_request(self) -> dict:
+        """WebUI「向管理员发起登录请求」：私聊管理员求确认。"""
+        from astrbot.api.web import error_response, json_response
+
+        assistant = self._plugin.cookie_assistant
+        try:
+            await assistant.request_from_webui()
+        except CookieAssistError as exc:
+            return error_response(str(exc))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("%s 发起 B站 登录请求失败：%s", LOG_PREFIX, exc)
+            return error_response(f"发起请求失败：{exc}")
+        return json_response({"sent": True})
+
     @staticmethod
     def _render_qr_base64(login_url: str) -> str:
         import qrcode
 
-        image = qrcode.make(login_url)
+        # 中等纠错 + 更大模块，提升手机扫码识别率（控制台内联二维码）
+        qr = qrcode.QRCode(
+            error_correction=qrcode.constants.ERROR_CORRECT_M,
+            box_size=12,
+            border=2,
+        )
+        qr.add_data(login_url)
+        qr.make(fit=True)
+        image = qr.make_image(fill_color="black", back_color="white")
         buffer = io.BytesIO()
         image.save(buffer, format="PNG")
         return base64.b64encode(buffer.getvalue()).decode("ascii")
@@ -289,8 +325,9 @@ class WebAPI:
             ok, detail = await assistant._poll(qrcode_key)
             if ok:
                 logger.info("%s 控制台发起的扫码登录成功 %s", LOG_PREFIX, detail)
-                state = await self._plugin.auth.refresh(self._plugin.bili, force=True)
-                await self._plugin._apply_cookie(state)
+                # 喂 Cookie + 强制校验已在 _poll 内完成，这里只做收尾（同步客户端 + 打日志），
+                # 不再重复 refresh，省掉一次多余的 nav 请求。
+                await self._plugin._apply_cookie(self._plugin.auth.state_snapshot)
             else:
                 logger.info("%s 控制台发起的扫码登录未完成：%s", LOG_PREFIX, detail)
         except Exception as exc:  # noqa: BLE001

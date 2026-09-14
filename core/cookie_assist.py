@@ -4,8 +4,8 @@
 
 1. Cookie 校验失效 → 私聊管理员求确认（带冷却，默认 30 分钟一次）
 2. 管理员回「确定」→ 请求 ``passport.bilibili.com/.../qrcode/generate``
-3. **本地用 qrcode 库渲染 PNG**（登录 token 不交给任何第三方）
-4. 发图 + 发链接；图片发送失败则回退纯链接
+3. 管理员回「确定」→ 请求 ``passport.bilibili.com/.../qrcode/generate`` 拿到 ``login_url`` + ``qrcode_key``
+4. 发两条链接：① 高清二维码（``api.qrserver.com`` 渲染，含 ``qrcode_key``，已告知风险）② 账号密码登录页（``login_url``）
 5. 每 2 秒轮询 ``.../qrcode/poll``
    ``code``：0=成功 / 86090=已扫码待确认 / 86101=未扫码 / 86038=过期（TTL 180 秒）
 6. 从响应头 ``Set-Cookie`` + 回调 URL 的 query 里提取
@@ -22,10 +22,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from http.cookies import SimpleCookie
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlparse, quote
 
 from .auth import COOKIE_KEYS, build_cookie_header
 from .constants import LOG_PREFIX
@@ -57,6 +58,9 @@ class CookieAssistant:
         self._pending_reason: str = ""
         self._last_request_ts = 0.0
         self._login_in_progress = False
+        self._login_success_count = 0  # 累计「新一次扫码成功」次数（WebUI 用于判断本轮是否真的扫到了）
+        self._admin_private_origin: str = ""  # 管理员私聊会话（WebUI 主动发起登录请求用）
+        self._load_admin_session()             # 重载后从磁盘恢复，避免缓存丢失
 
     # ------------------------------------------------------------- 状态
 
@@ -65,11 +69,48 @@ class CookieAssistant:
         return self._login_in_progress
 
     @property
+    def login_success_count(self) -> int:
+        """累计扫码成功次数。WebUI 以「本轮开始后的增量」判定本次扫码是否真的完成。"""
+        return self._login_success_count
+
+    @property
     def pending(self) -> bool:
         return bool(self._pending_umo)
 
     def _is_admin(self, user_id: str) -> bool:
-        return str(user_id) in (self._auth.admin_ids() or [])
+        """管理员判定：容忍平台前缀（如 ``aiocqhttp:2353449879`` 也能匹配纯数字配置）。"""
+        target = str(user_id)
+        for aid in (self._auth.admin_ids() or []):
+            if target == str(aid):
+                return True
+            # OneBot 适配器常在 sender_id 前加平台前缀，取最后一段再比
+            if target.rsplit(":", 1)[-1] == str(aid):
+                return True
+        return False
+
+    # ------------------------------------------------------------- 管理员会话持久化
+
+    def _admin_session_path(self) -> Path:
+        return self._dir / "admin_session.json"
+
+    def _load_admin_session(self) -> None:
+        """从磁盘恢复管理员私聊会话与平台，避免插件重载后缓存丢失。"""
+        try:
+            data = json.loads(self._admin_session_path().read_text(encoding="utf-8"))
+        except (FileNotFoundError, ValueError, OSError):
+            return
+        self._admin_private_origin = str(data.get("origin") or "")
+        if self._admin_private_origin:
+            logger.debug("%s 已从磁盘恢复管理员会话缓存", LOG_PREFIX)
+
+    def _save_admin_session(self) -> None:
+        try:
+            self._admin_session_path().write_text(
+                json.dumps({"origin": self._admin_private_origin}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+        except OSError as exc:  # noqa: BLE001
+            logger.debug("%s 保存管理员会话缓存失败：%s", LOG_PREFIX, exc)
 
     # ------------------------------------------------------------- 第 1 步：求确认
 
@@ -104,29 +145,25 @@ class CookieAssistant:
             f"原因：{reason}\n"
             "回复「确定」我给你发登录二维码，扫码即可恢复。回复「取消」忽略。"
         )
-        platform_id = self._platform_of(event)
-        sent = False
-        for admin_id in admins:
-            umo = f"{platform_id}:private:{admin_id}"
-            try:
-                from astrbot.api.event import MessageChain
+        # 必须用管理员私聊时真实产生的 unified_msg_origin（见 try_handle 缓存）。
+        # 不能手拼「平台:private:QQ号」—— AstrBot 的 MessageType 不认 "private" 这个令牌，
+        # 手拼的 UMO 会被 send_message 拒绝（'private' is not a valid MessageType）。
+        origin = self._admin_private_origin
+        if not origin:
+            logger.debug(
+                "%s 尚未记录管理员私聊会话，跳过主动协助（让管理员先给机器人发一条私聊）",
+                LOG_PREFIX,
+            )
+            return
+        try:
+            from astrbot.api.event import MessageChain
 
-                chain = MessageChain().message(text)
-                await self._send_to(umo, chain)
-                self._pending_umo = umo
-                sent = True
-                logger.info("%s 已向管理员 %s 发起 Cookie 续期请求", LOG_PREFIX, admin_id)
-            except Exception as exc:  # noqa: BLE001 - 逐个尝试
-                logger.debug("%s 私聊管理员 %s 失败：%s", LOG_PREFIX, admin_id, exc)
-
-        if not sent:
-            # 私聊通道不可用时，退而求其次：在当前会话里提示管理员
-            self._pending_umo = event.unified_msg_origin
-            try:
-                await event.send(event.plain_result(text))
-                logger.info("%s 私聊通道不可用，已在当前会话提示管理员", LOG_PREFIX)
-            except Exception as exc:  # noqa: BLE001
-                logger.debug("%s 提示管理员也失败：%s", LOG_PREFIX, exc)
+            chain = MessageChain().message(text)
+            await self._send_to(origin, chain)
+            self._pending_umo = origin
+            logger.info("%s 已向管理员发起 Cookie 续期请求", LOG_PREFIX)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("%s 私聊管理员失败：%s", LOG_PREFIX, exc)
 
     async def _send_to(self, umo: str, chain) -> None:
         """通过 AstrBot Context 主动发消息（需要 main.py 先注入 context）。"""
@@ -149,9 +186,24 @@ class CookieAssistant:
 
     def try_handle(self, event) -> bool:
         """尝试把这条消息当成协助流程的回复。返回 True 表示已消费。"""
+        sender = str(event.get_sender_id())
+        group_id = str(event.get_group_id() or "")
+        origin = str(event.unified_msg_origin or "")
+
+        if self._is_admin(sender):
+            # 记住管理员的私聊会话，供 WebUI「向管理员发起登录请求」复用。
+            # 与 media_parser 及官方 9.2 一致：直接存 event.unified_msg_origin 原样复用。
+            #
+            # 🔴 私聊判定必须用 group_id 是否为空（官方 5.1：group_id 私聊则为空），
+            # 绝不能匹配 UMO 里的 ":private:" —— AstrBot 的 MessageType 没有 "private"
+            # 成员（手拼会报 "'private' is not a valid MessageType"），真实 UMO 里也
+            # 不会出现该串，用 ":private:" 判断会让私聊会话永远记录不下来。
+            if not group_id and origin and origin != self._admin_private_origin:
+                self._admin_private_origin = origin
+                self._save_admin_session()
+                logger.info("%s 已记录管理员私聊会话（跨重启保留）：%s", LOG_PREFIX, origin)
         if not self._pending_umo:
             return False
-        sender = str(event.get_sender_id())
         if not self._is_admin(sender):
             return False
 
@@ -170,6 +222,42 @@ class CookieAssistant:
             return True
         return False
 
+    # ------------------------------------------------------------- WebUI 主动发起
+
+    async def request_from_webui(self) -> None:
+        """WebUI「向管理员发起登录请求」按钮调用：私聊管理员求确认。
+
+        复用 try_handle 缓存的管理员真实私聊会话（``unified_msg_origin``）。
+        该 origin 来自管理员实际发来的私聊事件，AstrBot 能直接解析；
+        不能手拼「平台:private:QQ号」（MessageType 不认 "private" 令牌）。
+        """
+        if not self._auth.assist_enabled():
+            raise CookieAssistError("未启用管理员协助，无法发起登录请求")
+        if self._login_in_progress:
+            logger.debug("%s 已有一轮扫码登录在进行，跳过 WebUI 重复发起", LOG_PREFIX)
+            return
+        if not self._admin_private_origin:
+            raise CookieAssistError(
+                "尚未记录管理员私聊会话：请先用管理员 QQ 给机器人发一条 1 对 1 私聊消息"
+                "（任意内容均可），插件会记住该会话；之后即可从 WebUI 发起登录请求。"
+                "该会话已持久化，重启插件后无需重复发送。"
+            )
+
+        text = (
+            "收到 WebUI 的 B站 登录请求。\n"
+            "回复「确定」我给你发登录二维码与账号密码登录链接，其他回复视为取消。"
+        )
+        try:
+            from astrbot.api.event import MessageChain
+
+            chain = MessageChain().message(text)
+            await self._send_to(self._admin_private_origin, chain)
+            self._pending_umo = self._admin_private_origin
+            logger.info("%s WebUI 已向管理员发起 B站 登录请求", LOG_PREFIX)
+        except Exception as exc:  # noqa: BLE001
+            self._pending_umo = ""
+            raise CookieAssistError(f"私聊管理员失败：{exc}")
+
     # ------------------------------------------------------------- 第 3 步：扫码流程
 
     async def run_login(self, event) -> None:
@@ -182,24 +270,17 @@ class CookieAssistant:
         self._login_in_progress = True
         try:
             login_url, qrcode_key = await self._generate()
-            qr_path: Path | None = None
-            try:
-                qr_path = await asyncio.to_thread(self._render_qr, login_url)
-                await self._send_qr(event, qr_path, login_url)
-            except Exception as exc:  # noqa: BLE001 - 图片失败就回退链接
-                logger.debug("%s 二维码图片发送失败（%s），回退纯链接", LOG_PREFIX, exc)
-                await event.send(
-                    event.plain_result(
-                        "扫码登录（180 秒内有效），请在浏览器打开：\n"
-                        f"{login_url}\n或用 B站 App 扫描上面链接生成的二维码。"
-                    )
-                )
-            finally:
-                if qr_path is not None:
-                    try:
-                        qr_path.unlink(missing_ok=True)
-                    except OSError as exc:
-                        logger.debug("%s 清理临时二维码失败：%s", LOG_PREFIX, exc)
+            qr_link = (
+                "https://api.qrserver.com/v1/create-qr-code/?size=400x400&data="
+                + quote(login_url)
+            )
+            text = (
+                "请使用以下任一方式完成 B站 登录（180 秒内有效）：\n"
+                f"① 扫码登录（高清二维码）：{qr_link}\n"
+                f"② 账号密码登录页：{login_url}\n"
+                "登录成功后 Cookie 将自动更新并落盘。"
+            )
+            await event.send(event.plain_result(text))
 
             ok, detail = await self._poll(qrcode_key)
             if ok:
@@ -234,25 +315,6 @@ class CookieAssistant:
             raise CookieAssistError("申请二维码失败：返回内容为空")
         return login_url, qrcode_key
 
-    @staticmethod
-    def _render_qr(login_url: str) -> Path:
-        import qrcode
-
-        path = plugin_data_dir() / f"login_qr_{int(time.time())}.png"
-        image = qrcode.make(login_url)
-        image.save(path)
-        return path
-
-    async def _send_qr(self, event, qr_path: Path, login_url: str) -> None:
-        import astrbot.api.message_components as Comp
-
-        chain = [
-            Comp.Plain("请用 B站 App 扫码完成登录（180 秒内有效）："),
-            Comp.Image.fromFileSystem(str(qr_path)),
-            Comp.Plain(f"或直接在浏览器打开：\n{login_url}"),
-        ]
-        await event.send(event.chain_result(chain))
-
     async def _poll(self, qrcode_key: str) -> tuple[bool, str]:
         logger.info("%s 正在等待扫码确认（最长 180 秒）…", LOG_PREFIX)
         deadline = time.time() + QR_TTL_SECONDS
@@ -264,9 +326,32 @@ class CookieAssistant:
 
             if code == 0:
                 credentials = self._extract(resp, data)
+                cookie_header = str(credentials.get("cookie_header") or "").strip()
                 self._auth.save_credentials(credentials)
-                self._auth.mark_invalid("扫码登录成功，下次校验将重新确认状态")
-                return True, f"（账号 UID {credentials.get('DedeUserID') or '未知'}）"
+                # 把扫码 Cookie 回填进配置，使其成为唯一来源；清空配置即登出
+                self._auth.set_config_cookie(cookie_header)
+                # 🔴 关键两步，缺一不可（否则配置落盘了，WebUI 仍显示「未登录」）：
+                #   ① 先把新 Cookie 喂给 BiliClient —— 不喂的话 refresh() 会拿旧（空）
+                #      Cookie 去调 nav，校验结果必然还是「未登录」；
+                #   ② 再立刻强制校验一次 —— mark_invalid() 只是把状态标脏
+                #      （checked_at=0），它自己不会重新校验；而 WebUI 的
+                #      api_status 读的是 state_snapshot 快照，不刷新就一直停在旧值。
+                self._client.set_cookie(cookie_header)
+                uname = ""
+                try:
+                    state = await self._auth.refresh(self._client, force=True)
+                    uname = state.uname or ""
+                    if not state.logged_in:
+                        logger.warning(
+                            "%s 扫码已成功但 Cookie 校验未通过：%s",
+                            LOG_PREFIX,
+                            state.reason or "未知原因",
+                        )
+                except Exception as exc:  # noqa: BLE001 - 校验失败不该让登录流程失败
+                    logger.warning("%s 扫码后 Cookie 校验异常（%s）", LOG_PREFIX, exc)
+                self._login_success_count += 1
+                who = uname or f"UID {credentials.get('DedeUserID') or '未知'}"
+                return True, f"（账号 {who}）"
             if code == 86038:
                 return False, "二维码已过期，请重新发起"
             # 86090 = 已扫码待确认；86101 = 未扫码 → 继续轮询

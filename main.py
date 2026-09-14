@@ -136,6 +136,9 @@ class HachimitsuMusicPlugin(Star):
 
         # ③ Cookie 状态
         try:
+            # 先把配置/扫码得到的 Cookie 喂给 BiliClient，
+            # 否则 refresh 走的是匿名 nav，会误报「Cookie 已失效或未登录」。
+            self.bili.set_cookie(self.auth.cookie_header())
             state = await self.auth.refresh(self.bili)
             await self._apply_cookie(state)
         except Exception as exc:  # noqa: BLE001

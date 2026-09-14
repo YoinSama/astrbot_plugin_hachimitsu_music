@@ -96,6 +96,9 @@ class AuthRuntime:
         self._runtime_credentials: dict = {}
         self._lock = asyncio.Lock()
         self._load_credentials()
+        # 「删配置即登出」：若配置 Cookie 已清空，而扫码缓存原本依附于配置 Cookie，
+        # 则在启动时一并清除，避免「删了配置还显示已登录」。
+        self._reconcile_config_cookie()
 
     # ------------------------------------------------------------- 配置
 
@@ -105,9 +108,37 @@ class AuthRuntime:
 
     def reload_config(self, config) -> None:
         self._config = config
+        self._reconcile_config_cookie()
 
     def configured_cookie(self) -> str:
         return str(self._bili_section().get("cookie") or "").strip()
+
+    def _reconcile_config_cookie(self) -> None:
+        """「删配置即登出」对账：配置 Cookie 为空时，清除扫码缓存，确保清空配置即等同于退出登录。"""
+        if self.configured_cookie():
+            return
+        if self._runtime_credentials:
+            logger.info("%s 配置 Cookie 为空，清除扫码缓存以彻底退出登录", LOG_PREFIX)
+            self.clear_credentials()
+
+    def set_config_cookie(self, header: str) -> None:
+        """把扫码得到的 Cookie 回填进插件配置 ``bili.cookie``（单一来源）并落盘。
+
+        这样无论手动填写还是扫码登录，Cookie 都只存在于配置一处；
+        清空配置里的 Cookie 即等同于退出登录。
+        """
+        if not header:
+            return
+        bili = dict(self._bili_section())
+        bili["cookie"] = header
+        try:
+            self._config["bili"] = bili
+            save = getattr(self._config, "save_config", None)
+            if callable(save):
+                save()
+            logger.info("%s 扫码 Cookie 已回填至配置 bili.cookie", LOG_PREFIX)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("%s 配置 Cookie 回填失败（%s），本次仅内存生效", LOG_PREFIX, exc)
 
     # ------------------------------------------------------------- 凭据落盘
 

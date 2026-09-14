@@ -19,6 +19,11 @@ const state = {
   busy: false,
 };
 
+// 扫码登录轮询定时器（登录成功后清除）
+let loginPollTimer = null;
+// 本轮扫码开始前的「扫码成功」计数基准（用于判断本次是否真的扫到了）
+let loginStartCount = 0;
+
 /* ------------------------------------------------------------ 工具函数 */
 
 function toast(message, kind = "ok") {
@@ -97,9 +102,11 @@ function renderStatus() {
     )
   );
 
+  const sourceLabel =
+    { config: "配置", credentials: "扫码缓存", anonymous: "匿名" }[bili.source] || bili.source;
   const cookieText = bili.logged_in
-    ? `已登录（${bili.uname || "未知"}）· ${bili.is_vip ? "大会员" : "非大会员"}`
-    : `未登录 · ${bili.reason || "匿名模式"}`;
+    ? `已登录（${bili.uname || "未知"}）· ${bili.is_vip ? "大会员" : "非大会员"} · 来源 ${sourceLabel}`
+    : `未登录 · ${bili.reason || "匿名模式"} · 来源 ${sourceLabel}`;
   list.append(row("B站 Cookie", cookieText, bili.logged_in ? null : "var(--c-text-dim)"));
 
   list.append(
@@ -287,20 +294,108 @@ async function clearCache() {
 
 async function startLogin() {
   await guard(async () => {
+    // 先刷新状态，记录本轮开始前的「扫码成功」计数基准
+    await loadStatus();
+    loginStartCount = (state.status && state.status.bili && state.status.bili.login_success_count) || 0;
     const result = await bridge.apiPost("bili/login", {});
     const panel = $("qr-panel");
+    // 重置二维码区提示（上一次「扫码成功」可能还留着）
+    const tip = panel.querySelector(".hm-qr__tip");
+    if (tip) {
+      tip.textContent = "用 B站 App 扫码，180 秒内有效。";
+      tip.style.color = "var(--c-text-dim)";
+    }
     if (result.qrcode_base64) {
       $("qr-image").src = `data:image/png;base64,${result.qrcode_base64}`;
       $("qr-image").hidden = false;
     } else {
       $("qr-image").hidden = true;
     }
-    if (result.login_url) {
-      $("qr-link").href = result.login_url;
-    }
     panel.hidden = false;
     toast("二维码已生成，请用 B站 App 扫码（180 秒内有效）", "ok");
+    // 后台轮询登录状态，成功后给出「扫码成功」反馈
+    startLoginPoll();
   }, "正在申请二维码…");
+}
+
+function startLoginPoll() {
+  stopLoginPoll();
+  loginPollTimer = setInterval(async () => {
+    try {
+      const s = await bridge.apiGet("status");
+      // 只有「本轮开始之后」出现了新的扫码成功，才判定为本次扫码完成，
+      // 避免已有 cookie 时一弹码就误报「扫码成功」。
+      if (s && s.bili && s.bili.login_success_count > loginStartCount) {
+        stopLoginPoll();
+        showQrSuccess();
+      }
+    } catch (err) {
+      // 轮询失败不打扰用户，下次继续
+    }
+  }, 2000);
+}
+
+function stopLoginPoll() {
+  if (loginPollTimer !== null) {
+    clearInterval(loginPollTimer);
+    loginPollTimer = null;
+  }
+}
+
+function showQrSuccess() {
+  const tip = document.querySelector("#qr-panel .hm-qr__tip");
+  if (tip) {
+    tip.textContent = "✅ 扫码成功，B站 已登录";
+    tip.style.color = "var(--c-ok)";
+  }
+  toast("扫码登录成功，B站 Cookie 已更新并落盘", "ok");
+  loadStatus();
+}
+
+/**
+ * 管理员在私聊里扫码的场景：WebUI 没有二维码面板，也不会收到任何回调，
+ * 只能靠轮询 login_success_count 的增量来判断「这一轮真的扫上了」。
+ * 成功后自动拉一次 status（后端 api_status 会顺带把 Cookie 校验刷新）。
+ */
+async function watchAssistLogin() {
+  stopLoginPoll();
+  await loadStatus();
+  const base = (state.status && state.status.bili && state.status.bili.login_success_count) || 0;
+  let ticks = 0;
+  loginPollTimer = setInterval(async () => {
+    ticks += 1;
+    if (ticks > 300) {
+      // 最多等 10 分钟，避免定时器无限挂着
+      stopLoginPoll();
+      return;
+    }
+    try {
+      const s = await bridge.apiGet("status");
+      if (s && s.bili && s.bili.login_success_count > base) {
+        stopLoginPoll();
+        await loadStatus();
+        toast("管理员扫码登录成功，B站 Cookie 已更新", "ok");
+      }
+    } catch (err) {
+      // 轮询失败不打扰用户，下次继续
+    }
+  }, 2000);
+}
+
+// 「在浏览器打开登录页」按钮已移除，WebUI 仅保留二维码
+
+async function requestLogin() {
+  await guard(async () => {
+    const result = await bridge.apiPost("bili/request", {});
+    if (result && result.sent) {
+      toast("已向管理员发起 B站 登录请求，请等待管理员在私聊中确认", "ok");
+      // 管理员是在 QQ 私聊里扫码的，WebUI 不会自动感知 → 起一个观察者，
+      // 一旦扫码成功就自动刷新 Cookie 状态（最多等 10 分钟）。
+      await watchAssistLogin();
+    } else {
+      toast("发起请求未返回预期结果", "err");
+    }
+  }, "正在向管理员发起请求…");
 }
 
 /* ------------------------------------------------------------ 数据加载 */
@@ -344,6 +439,7 @@ function bindEvents() {
   $("btn-rank-refresh").addEventListener("click", refreshRank);
   $("btn-cache-clear").addEventListener("click", clearCache);
   $("btn-bili-login").addEventListener("click", startLogin);
+  $("btn-request-login").addEventListener("click", requestLogin);
 }
 
 /* ------------------------------------------------------------ 启动 */
