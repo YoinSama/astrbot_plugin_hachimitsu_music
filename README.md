@@ -208,6 +208,7 @@ Cookie 失效时，插件会私聊管理员请求确认；管理员回复「确�
 - 感谢 `pinkillqaq` 大佬制作的哈基米音乐整合网站 [hajihami.com](https://hajihami.com)，联系方式：asaxinw@gmail.com
 - 感谢创作😺哈基米音乐😻的全民制作人
 - 感谢 Astrbot 的开源社区
+- 感谢 Deepseek-V4.1-Flash 对本项目的大力支持
 
 ## 许可证
 
