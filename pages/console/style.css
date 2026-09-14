@@ -427,8 +427,9 @@ button {
 }
 
 .hm-qr img {
-  width: 168px;
-  height: 168px;
+  width: 240px;
+  height: 240px;
+  padding: 8px;
   border-radius: var(--radius-sm);
   background: #fff;
 }
