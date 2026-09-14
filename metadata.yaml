@@ -1,19 +1,27 @@
 name: astrbot_plugin_hachimitsu_music
-display_name: 哈基米音乐点歌
+display_name: 哈基米音乐点歌插件
 short_desc: 
-  从 hajihami.com 里点歌，获取作品音频以语音消息形式发到群里。
+  从数据来源随机获取或模糊搜索你想要的哈基米音乐
 desc: |
-  从 hajihami.com 里点歌，获取作品音频以语音消息形式发到群里。
-
-  · `/哈基米` —— 随机一首（总榜 + 五个风格池加权抽取）
-  · `/哈基米 <关键词>` —— 模糊搜索，最多 5 条，回复序号即可点播
-  · `/哈基米 帮助` —— 用法说明
-  · `/哈基米状态` —— 查看运行状态（仅管理员）
-
-  音频从 B站 拉取后转成紧凑 mp3 以语音发送，匿名即可使用，
-  配置带大会员的 Cookie 后可选择 Hi-Res 无损音轨（虽然效果不明显）。
+  发送点歌指令后从 hajihami.com 里获取数据来源，从数据来源获取作品音频并以语音消息形式发到群里。
+  音频从 B站 获取后转成紧凑 mp3 以语音发送，无需 Cookie 也可使用，配置带大会员的 Cookie 后可选择 Hi-Res 无损音轨（虽然效果不明显）。
+  限流与队列配置，精准管理群里点歌频率。
 version: v1.1.1
-author: Yoin
+author: YoinSama
 repo: https://github.com/YoinSama/astrbot_plugin_hachimitsu_music
 support_platforms:
   - aiocqhttp
+astrbot_version: ">=4.27.2"
+tags:
+  - WebUI
+  - 群聊
+  - 点歌
+  - 哈基米
+  - 叮咚鸡
+  - 大狗叫
+help: 
+  · `/哈基米` —— 随机一首（总榜 + 五个风格池加权抽取）
+  · `/哈基米 <关键词>` —— 模糊搜索，最多 5 条，回复序号即可点播
+  · `/哈基米 帮助` —— 用法说明
+  · `/哈基米 状态` —— 查看运行状态（仅管理员）
+category: 娱乐

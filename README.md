@@ -1,6 +1,6 @@
 <div align="center">
 
-# 哈基米音乐点歌
+# 哈基米音乐点歌插件
 [![Plugin Version](https://img.shields.io/badge/当前版本-v1.1.1-blue.svg?style=for-the-badge&color=76bad9)](https://github.com/YoinSama/astrbot_plugin_hachimitsu_music) [![AstrBot Version](https://img.shields.io/badge/AstrBot-%3E%3D4.27.2-orange.svg?style=for-the-badge)](https://github.com/AstrBotDevs/AstrBot) [![License](https://img.shields.io/badge/License-MIT-green.svg?style=for-the-badge)](LICENSE)
 ![哈基米音乐点歌](logo_MAX.png)
 
