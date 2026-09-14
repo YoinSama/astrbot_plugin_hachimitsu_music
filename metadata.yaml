@@ -1,8 +1,9 @@
 name: astrbot_plugin_hachimitsu_music
 display_name: 哈基米音乐点歌
-short_desc: 群聊点歌，直接把整首 B站音频当语音发出来
+short_desc: 
+  从 hajihami.com 里点歌，获取作品音频以语音消息形式发到群里。
 desc: |
-  从 hajihami.com 的 B站播放量总榜里点歌，音频直接以语音消息发到群里。
+  从 hajihami.com 里点歌，获取作品音频以语音消息形式发到群里。
 
   · `/哈基米` —— 随机一首（总榜 + 五个风格池加权抽取）
   · `/哈基米 <关键词>` —— 模糊搜索，最多 5 条，回复序号即可点播
@@ -10,8 +11,8 @@ desc: |
   · `/哈基米状态` —— 查看运行状态（仅管理员）
 
   音频从 B站 拉取后转成紧凑 mp3 以语音发送，匿名即可使用，
-  配置带大会员的 Cookie 后可选择 Hi-Res 无损音轨。
-version: v1.1.0
+  配置带大会员的 Cookie 后可选择 Hi-Res 无损音轨（虽然效果不明显）。
+version: v1.1.1
 author: Yoin
 repo: https://github.com/YoinSama/astrbot_plugin_hachimitsu_music
 support_platforms:
