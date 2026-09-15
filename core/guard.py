@@ -22,9 +22,22 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .constants import LOG_PREFIX
+from .limits import UNLIMITED, resolve_limit
 from .utils import logger, plugin_data_dir, parse_id_list
 
 CIRCUIT_BREAK_SECONDS = 120  # 命中风控后的全局熔断时长（方案 §14）
+
+# 支持哨兵（-1 = 不生效）的限制项及其默认值，见 limits.SENTINEL_KEYS。
+# 默认值必须与 _conf_schema.json 保持一致；缺键时用它兜底（升级场景）。
+LIMIT_DEFAULTS = {
+    "user_cooldown_seconds": 30,
+    "group_cooldown_seconds": 10,
+    "user_daily_limit": 20,
+    "group_daily_limit": 100,
+    "global_per_minute": 10,
+    "max_concurrency": 2,
+    "queue_max": 20,
+}
 
 
 @dataclass
@@ -61,11 +74,11 @@ class Guard:
         self._circuit_reason = ""
         self._waiting = 0
         self._group_locks: dict[str, asyncio.Lock] = {}
+        self._limits: dict[str, int] = {}
+        self._corrections: list[dict] = []
+        self._semaphore: asyncio.Semaphore | None = None
 
-        limits = self._section("limit")
-        self._semaphore = asyncio.Semaphore(max(1, self._int(limits, "max_concurrency", 2)))
-        self._queue_max = max(1, self._int(limits, "queue_max", 20))
-
+        self._reload_limits()
         self._load()
 
     # ------------------------------------------------------------- 配置读取
@@ -81,12 +94,36 @@ class Guard:
         except (TypeError, ValueError):
             return default
 
+    @property
+    def corrections(self) -> list[dict]:
+        """启动时/保存后收集到的「无效输入已被纠正」清单，供用户提示使用。"""
+        return list(self._corrections)
+
+    def _reload_limits(self) -> None:
+        """重算全部哨兵限制项。
+
+        ⚠️ 这里不能用 ``max(1, ...)`` —— 那会把哨兵 ``-1`` 一起夹成 1（最严格，
+        恰好与"关闭"相反）。所有取值统一走 ``limits.resolve_limit``。
+        """
+        limits = self._section("limit")
+        self._limits = {}
+        self._corrections = []
+
+        for key, default in LIMIT_DEFAULTS.items():
+            value, note = resolve_limit(limits.get(key), default)
+            self._limits[key] = value
+            if note:
+                self._corrections.append({"key": f"limit.{key}", "message": note})
+
+        concurrency = self._limits["max_concurrency"]
+        # -1 = 真不限并发（不加信号量）；否则正常限流
+        self._semaphore = None if concurrency == UNLIMITED else asyncio.Semaphore(concurrency)
+        self._queue_max = self._limits["queue_max"]
+
     def reload_config(self, config) -> None:
         """配置热更新后刷新内部参数。"""
         self._config = config
-        limits = self._section("limit")
-        self._semaphore = asyncio.Semaphore(max(1, self._int(limits, "max_concurrency", 2)))
-        self._queue_max = max(1, self._int(limits, "queue_max", 20))
+        self._reload_limits()
 
     # ------------------------------------------------------------- 持久化
 
@@ -178,12 +215,11 @@ class Guard:
     def check_rate(self, group_id: str, user_id: str) -> Decision:
         """第二层：冷却 / 日配额 / 全局速率。"""
         self._ensure_today()
-        limits = self._section("limit")
         now = time.time()
 
         # 全局每分钟
-        minute_limit = self._int(limits, "global_per_minute", 10)
-        if minute_limit > 0:
+        minute_limit = self._limits["global_per_minute"]
+        if minute_limit != UNLIMITED:
             window = [
                 ts for ts in (self._data["global"].get("minute") or []) if now - ts < 60
             ]
@@ -194,34 +230,34 @@ class Guard:
 
         # 用户冷却
         if user_id:
-            cooldown = self._int(limits, "user_cooldown_seconds", 30)
+            cooldown = self._limits["user_cooldown_seconds"]
             entry = self._bucket("users", user_id)
-            if cooldown > 0 and entry["last_ts"]:
+            if cooldown != UNLIMITED and entry["last_ts"]:
                 elapsed = now - float(entry["last_ts"])
                 if elapsed < cooldown:
                     return Decision(False, "你点歌太频繁了", int(cooldown - elapsed) + 1)
 
         # 群冷却
         if group_id:
-            cooldown = self._int(limits, "group_cooldown_seconds", 10)
+            cooldown = self._limits["group_cooldown_seconds"]
             entry = self._bucket("groups", group_id)
-            if cooldown > 0 and entry["last_ts"]:
+            if cooldown != UNLIMITED and entry["last_ts"]:
                 elapsed = now - float(entry["last_ts"])
                 if elapsed < cooldown:
                     return Decision(False, "本群点歌太频繁了", int(cooldown - elapsed) + 1)
 
         # 用户日配额
         if user_id:
-            limit = self._int(limits, "user_daily_limit", 20)
+            limit = self._limits["user_daily_limit"]
             entry = self._bucket("users", user_id)
-            if limit > 0 and entry["day"] >= limit:
+            if limit != UNLIMITED and entry["day"] >= limit:
                 return Decision(False, "你今天的点歌次数已用完")
 
         # 群日配额
         if group_id:
-            limit = self._int(limits, "group_daily_limit", 100)
+            limit = self._limits["group_daily_limit"]
             entry = self._bucket("groups", group_id)
-            if limit > 0 and entry["day"] >= limit:
+            if limit != UNLIMITED and entry["day"] >= limit:
                 return Decision(False, "本群今天的点歌次数已用完")
 
         return Decision(True)
@@ -246,6 +282,8 @@ class Guard:
     # ------------------------------------------------------------- 队列
 
     def checking_queue(self) -> bool:
+        if self._queue_max == UNLIMITED:
+            return False
         return self._waiting >= self._queue_max
 
     @asynccontextmanager
@@ -258,8 +296,11 @@ class Guard:
         try:
             lock = self._group_locks.setdefault(group_id or "__private__", asyncio.Lock())
             async with lock:
-                async with self._semaphore:
+                if self._semaphore is None:
                     yield
+                else:
+                    async with self._semaphore:
+                        yield
         finally:
             self._waiting -= 1
             if group_id and self._waiting <= 0:
@@ -306,8 +347,8 @@ class Guard:
     def snapshot(self) -> dict:
         """给 WebUI 的配额快照。"""
         self._ensure_today()
-        limits = self._section("limit")
         groups = []
+        group_limit = self._limits.get("group_daily_limit", 100)
         for key, entry in sorted(self._data.get("groups", {}).items()):
             if not isinstance(entry, dict):
                 continue
@@ -315,10 +356,11 @@ class Guard:
                 {
                     "id": key,
                     "used": int(entry.get("day", 0)),
-                    "limit": self._int(limits, "group_daily_limit", 100),
+                    "limit": group_limit,
                 }
             )
         users = []
+        user_limit = self._limits.get("user_daily_limit", 20)
         for key, entry in sorted(self._data.get("users", {}).items()):
             if not isinstance(entry, dict):
                 continue
@@ -326,7 +368,7 @@ class Guard:
                 {
                     "id": key,
                     "used": int(entry.get("day", 0)),
-                    "limit": self._int(limits, "user_daily_limit", 20),
+                    "limit": user_limit,
                 }
             )
         return {

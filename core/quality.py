@@ -14,8 +14,6 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 from .constants import AUDIO_TRACK_ORDER, AUDIO_TRACK_QUALITY, LOG_PREFIX
 from .utils import logger
 

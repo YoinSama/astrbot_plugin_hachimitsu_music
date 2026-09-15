@@ -78,14 +78,31 @@
             <input class="hm-input" id="cfg-rank-hours" type="number" min="0" />
           </label>
           <label class="hm-field">
-            <span class="hm-field__label">用户冷却（秒）</span>
-            <input class="hm-input" id="cfg-user-cooldown" type="number" min="0" />
+            <span class="hm-field__label">用户冷却（秒，填 -1 不限制）</span>
+            <input class="hm-input" id="cfg-user-cooldown" type="number" min="-1" />
           </label>
           <label class="hm-field">
-            <span class="hm-field__label">群日配额</span>
-            <input class="hm-input" id="cfg-group-daily" type="number" min="0" />
+            <span class="hm-field__label">群日配额（填 -1 不限制）</span>
+            <input class="hm-input" id="cfg-group-daily" type="number" min="-1" />
+          </label>
+          <label class="hm-field">
+            <span class="hm-field__label">最短时长（秒，填 0 或 -1 不限）</span>
+            <input class="hm-input" id="cfg-min-seconds" type="number" min="-1" />
+          </label>
+          <label class="hm-field">
+            <span class="hm-field__label">最长时长（秒，填 -1 不限制）</span>
+            <input class="hm-input" id="cfg-max-seconds" type="number" min="-1" />
+          </label>
+          <label class="hm-field">
+            <span class="hm-field__label">超时长自动换几首</span>
+            <input class="hm-input" id="cfg-resample-max" type="number" min="1" max="20" />
           </label>
         </div>
+        <div class="hm-note" id="config-corrected" hidden></div>
+        <p class="hm-tip">
+          上限类配置填 <b>-1</b> 表示「这项限制不生效」；填 <b>0</b> 无效，会按最小可用值处理
+          （最长时长除外，它按默认 600 秒处理）。
+        </p>
         <div class="hm-actions">
           <button class="hm-btn hm-btn--primary" id="btn-save-config" type="button">保存配置</button>
         </div>

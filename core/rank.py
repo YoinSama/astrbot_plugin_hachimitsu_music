@@ -16,6 +16,7 @@ import json
 import random
 import time
 from pathlib import Path
+from typing import Iterable
 
 from .constants import (
     LOG_PREFIX,
@@ -23,6 +24,7 @@ from .constants import (
     TOP_SOURCE,
     VIDEO_URL_TEMPLATE,
 )
+from .duration import DurationGate, DurationStore
 from .utils import logger, plugin_data_dir
 
 # 落盘时保留的字段（raw_url 等中间字段不落盘，控制文件体积）
@@ -195,8 +197,34 @@ class RankStore:
 
     # ------------------------------------------------------------- 取歌
 
+    def _eligible(
+        self,
+        positions: "Iterable[int]",
+        gate: DurationGate | None,
+        store: DurationStore | None,
+    ) -> list[int]:
+        """在候选下标里剔除「已知超限」和「已失效」的作品。
+
+        v1.2.0：这只是**少走一趟冤枉路**的优化 —— 时长未知的作品一律保留，
+        真正的判定在 ``_process`` 里做（那时 ``view`` 已经把真实时长带回来了）。
+        把未知的也剔掉会把整个池子清空，所以这里必须"只剔已知的"。
+        """
+        if gate is None or store is None or not gate.enabled:
+            return list(positions)
+        kept: list[int] = []
+        for position in positions:
+            row = self._rows[position]
+            if gate.allows(store.get(row.get("bv") or "")):
+                kept.append(position)
+        return kept
+
     def pick_random(
-        self, top_n: int = 1000, top_weight: int = 50, style_weight: int = 10
+        self,
+        top_n: int = 1000,
+        top_weight: int = 50,
+        style_weight: int = 10,
+        gate: DurationGate | None = None,
+        store: DurationStore | None = None,
     ) -> dict | None:
         """加权一次选出数据来源，再从该来源里随机取一首。
 
@@ -205,6 +233,9 @@ class RankStore:
 
         用「加权一次选」而不是「先掷硬币决定走总榜还是风格池，再均分」是因为
         两者概率完全相同，但前者每个来源的权重可以单独调，配置也更直观。
+
+        ``gate`` + ``store`` 都给时，会先排除已知超时长 / 已失效的作品
+        （方案 v3 §2.3）。过滤后池子若空了就**回退为不过滤**，绝不返回空。
         """
         if not self._rows:
             return None
@@ -217,9 +248,20 @@ class RankStore:
         source = random.choices(sources, weights=weights, k=1)[0]
         if source != TOP_SOURCE:
             candidates = self._style_index.get(source) or []
-            if candidates:
+            picked = self._eligible(candidates, gate, store)
+            if picked:
                 logger.debug(
-                    "%s 随机取源：命中风格池「%s」，候选 %d 首",
+                    "%s 随机取源：命中风格池「%s」，候选 %d 首（过滤后 %d 首）",
+                    LOG_PREFIX,
+                    source,
+                    len(candidates),
+                    len(picked),
+                )
+                return self._rows[random.choice(picked)]
+            if candidates:
+                # 整个池子都被过滤掉了（极端配置）→ 回退，绝不返回空
+                logger.debug(
+                    "%s 风格池「%s」%d 首全部被时长规则排除，已回退为不过滤",
                     LOG_PREFIX,
                     source,
                     len(candidates),
@@ -229,7 +271,9 @@ class RankStore:
             logger.debug("%s 风格池「%s」当前为空，已回退总榜", LOG_PREFIX, source)
 
         limit = max(1, min(int(top_n), len(self._rows)))
-        return random.choice(self._rows[:limit])
+        positions = range(limit)
+        picked = self._eligible(positions, gate, store) or list(positions)
+        return self._rows[random.choice(picked)]
 
     def search(self, keyword: str, limit: int = 5) -> list[dict]:
         """模糊搜索：标题或 UP主 命中全部关键词即可。

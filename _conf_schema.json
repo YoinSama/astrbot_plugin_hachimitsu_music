@@ -87,49 +87,49 @@
   "limit": {
     "description": "限流与队列",
     "type": "object",
-    "hint": "防止刷屏与滥用的四层闸门参数。所有拦截都会明确回复原因和剩余等待秒数。",
+    "hint": "防止刷屏与滥用的四层闸门参数。所有拦截都会明确回复原因和剩余等待秒数。带「填 -1 表示不限制」字样的项，填 -1 就会完全关掉那一项限制；填 0 无效，会按 1 处理。",
     "items": {
       "user_cooldown_seconds": {
         "description": "用户冷却（秒）",
         "type": "int",
         "default": 30,
-        "hint": "同一个用户两次点歌之间的最短间隔。"
+        "hint": "同一个用户两次点歌之间的最短间隔。填 -1 表示不限制；填 0 或无效值会按 1 处理。"
       },
       "group_cooldown_seconds": {
         "description": "群冷却（秒）",
         "type": "int",
         "default": 10,
-        "hint": "同一个群两次点歌之间的最短间隔。"
+        "hint": "同一个群两次点歌之间的最短间隔。填 -1 表示不限制；填 0 或无效值会按 1 处理。"
       },
       "user_daily_limit": {
         "description": "用户日配额（首）",
         "type": "int",
         "default": 20,
-        "hint": "单个用户每天最多点歌数量，每天 0 点重置。"
+        "hint": "单个用户每天最多点歌数量，每天 0 点重置。填 -1 表示不限制；填 0 或无效值会按 1 处理。"
       },
       "group_daily_limit": {
         "description": "群日配额（首）",
         "type": "int",
         "default": 100,
-        "hint": "单个群每天最多点歌数量，每天 0 点重置。"
+        "hint": "单个群每天最多点歌数量，每天 0 点重置。填 -1 表示不限制；填 0 或无效值会按 1 处理。"
       },
       "global_per_minute": {
         "description": "全局每分钟上限（首）",
         "type": "int",
         "default": 10,
-        "hint": "所有群合计每分钟最多处理多少首。"
+        "hint": "所有群合计每分钟最多处理多少首。填 -1 表示不限制；填 0 或无效值会按 1 处理。"
       },
       "max_concurrency": {
         "description": "最大并发数",
         "type": "int",
         "default": 2,
-        "hint": "同时处理的点歌任务数上限。建议 2~3。"
+        "hint": "同时处理的点歌任务数上限。建议 2~3。填 -1 表示不限制；填 0 或无效值会按 1 处理。"
       },
       "queue_max": {
         "description": "队列上限",
         "type": "int",
         "default": 20,
-        "hint": "等待队列的最大长度，超出后直接提示稍后再试。"
+        "hint": "等待队列的最大长度，超出后直接提示稍后再试。填 -1 表示不限制；填 0 或无效值会按 1 处理。"
       },
       "task_timeout_seconds": {
         "description": "单任务超时（秒）",
@@ -148,6 +148,31 @@
         "type": "int",
         "default": 2048,
         "hint": "音频文件的 LRU 缓存体积上限，超出后按最久未使用淘汰。"
+      }
+    }
+  },
+  "duration": {
+    "description": "作品长度",
+    "type": "object",
+    "hint": "限制参与点歌的作品长度。随机和搜索都会自动跳过超限的作品，不会有任何提示。",
+    "items": {
+      "min_seconds": {
+        "description": "最短时长（秒）",
+        "type": "int",
+        "default": 0,
+        "hint": "短于这个长度的作品不参与点歌。填 0 或 -1 都表示不限制最短。"
+      },
+      "max_seconds": {
+        "description": "最长时长（秒）",
+        "type": "int",
+        "default": 600,
+        "hint": "长于这个长度的作品不参与点歌，会自动换一首。默认 600 秒（10 分钟）；填 -1 不限制最长；填 0 无效，会按 600 处理。"
+      },
+      "resample_max": {
+        "description": "自动换曲次数",
+        "type": "int",
+        "default": 3,
+        "hint": "随机到超限作品时最多自动换几首。默认 3，通常不用改。"
       }
     }
   },

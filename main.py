@@ -37,11 +37,22 @@ from astrbot.api.star import Context, Star, register
 from .core.audio import AudioDownloadError, AudioFetcher
 from .core.auth import AuthRuntime
 from .core.bili import BiliClient, BiliError, BiliRiskError
-from .core.constants import LOG_PREFIX, PLUGIN_NAME, PLUGIN_VERSION, SEARCH_LIMIT
+from .core.constants import (
+    DEAD_VIEW_CODES,
+    DURATION_MAX_DEFAULT,
+    DURATION_RESAMPLE_DEFAULT,
+    LOG_PREFIX,
+    PLUGIN_NAME,
+    PLUGIN_VERSION,
+    SEARCH_CANDIDATE_EXTRA,
+    SEARCH_LIMIT,
+)
 from .core.cookie_assist import CookieAssistant
 from .core.delivery import build_caption, send_voice
+from .core.duration import DEAD, DurationGate, DurationRejected, DurationStore
 from .core.encoder import transcode_to_mp3
 from .core.guard import Guard, QueueFull
+from .core.limits import describe, resolve_bound, resolve_positive
 from .core.logging_noise import install_noise_filter
 from .core.quality import NoAudioTrack, pick_audio_track, track_size, track_url
 from .core.rank import RankStore, video_url
@@ -73,6 +84,9 @@ class HachimitsuMusicPlugin(Star):
 
         data_dir = plugin_data_dir()
         self.rank = RankStore(data_dir / "rank.json")
+        # 作品时长缓存：随每次点播免费积累，不做全量预热
+        self.duration = DurationStore(data_dir / "duration.json")
+        self.duration.load()
         self.guard = Guard(config, data_dir)
         self.auth = AuthRuntime(config, data_dir)
         self.bili = BiliClient(timeout=30.0, max_concurrency=3)
@@ -108,6 +122,12 @@ class HachimitsuMusicPlugin(Star):
             top_weight,
             style_weight,
         )
+        # 无效输入（填 0 / 填了非数字）已被自动纠正，明确告诉管理员
+        for item in self.corrections():
+            logger.warning(
+                "%s 配置已自动纠正 —— %s：%s", LOG_PREFIX, item["key"], item["message"]
+            )
+        logger.info("%s ①b 作品时长限制 —— %s", LOG_PREFIX, self._duration_gate().describe())
 
         # ② 榜单缓存
         loaded = self.rank.load()
@@ -213,6 +233,62 @@ class HachimitsuMusicPlugin(Star):
     def _is_admin(self, user_id) -> bool:
         return str(user_id) in (self.auth.admin_ids() or [])
 
+    # ------------------------------------------------------- 时长规则（v1.2.0）
+
+    def _duration_gate(self) -> DurationGate:
+        """按当前配置构造时长闸门。
+
+        每次点歌现取，所以 WebUI 改完配置**立刻生效**，不用重载插件。
+        """
+        section = self._section("duration")
+        low, _ = resolve_bound(section.get("min_seconds"), 0)
+        high, _ = resolve_bound(section.get("max_seconds"), DURATION_MAX_DEFAULT)
+        return DurationGate(low, high)
+
+    def _resample_attempts(self, resample, gate: DurationGate) -> int:
+        """最多试几首歌才放弃过滤。闸门没开就只试 1 次。"""
+        if resample is None or not gate.enabled:
+            return 1
+        value, _ = resolve_positive(
+            self._section("duration").get("resample_max"), DURATION_RESAMPLE_DEFAULT
+        )
+        return max(1, value)
+
+    def _duration_corrections(self) -> list[dict]:
+        """``duration`` 组里的无效输入清单。"""
+        section = self._section("duration")
+        out: list[dict] = []
+        for key, default, resolver in (
+            ("min_seconds", 0, resolve_bound),
+            ("max_seconds", DURATION_MAX_DEFAULT, resolve_bound),
+            ("resample_max", DURATION_RESAMPLE_DEFAULT, resolve_positive),
+        ):
+            _, note = resolver(section.get(key), default)
+            if note:
+                out.append({"key": f"duration.{key}", "message": note})
+        return out
+
+    def corrections(self) -> list[dict]:
+        """全部「无效输入已被自动纠正」的说明，供启动日志与 WebUI 提示条使用。"""
+        return [*self.guard.corrections, *self._duration_corrections()]
+
+    def _remember_duration(self, bv: str, view: dict | None) -> int | None:
+        """把 ``view`` 里白送的时长记进缓存并返回秒数。
+
+        拿不到（接口失败 / 字段缺失）返回 ``None`` —— **未知一律放行**，
+        硬当成超限会把整池歌都排除掉。
+        """
+        if not bv or not isinstance(view, dict):
+            return None
+        try:
+            seconds = int(view.get("duration") or 0)
+        except (TypeError, ValueError):
+            return None
+        if seconds <= 0:
+            return None
+        self.duration.put(bv, seconds)
+        return seconds
+
     @staticmethod
     def _extract_arg(message_str: str) -> str:
         """剥离指令名，取后面的参数。``/哈基米 曼波`` → ``曼波``。"""
@@ -266,35 +342,71 @@ class HachimitsuMusicPlugin(Star):
     # =============================================================== 随机点歌
 
     async def _random_flow(self, event: AstrMessageEvent) -> None:
-        row = self.rank.pick_random(
-            top_n=self._cfg_int("random", "top_n", 1000),
-            top_weight=self._cfg_int("random", "top_weight", 50),
-            style_weight=self._cfg_int("random", "style_weight", 10),
-        )
+        gate = self._duration_gate()
+
+        def _pick() -> dict | None:
+            return self.rank.pick_random(
+                top_n=self._cfg_int("random", "top_n", 1000),
+                top_weight=self._cfg_int("random", "top_weight", 50),
+                style_weight=self._cfg_int("random", "style_weight", 10),
+                gate=gate,
+                store=self.duration,
+            )
+
+        row = _pick()
         if not row:
             await event.send(
                 event.plain_result("榜单还没准备好，请稍等片刻再试（或让管理员查看状态）。")
             )
             return
-        await self._deliver(event, row)
+        # 抽到超限作品时用它换一首（用户全程无感，见 _deliver 的重抽循环）
+        await self._deliver(event, row, resample=_pick)
 
     # =============================================================== 搜索点歌
 
     async def _search_flow(self, event: AstrMessageEvent, keyword: str) -> None:
-        rows = self.rank.search(keyword, limit=SEARCH_LIMIT)
-        if not rows:
+        # v1.2.0：多取几条候选。get_views 是并发的，多取 3 条几乎不增加耗时，
+        # 而超时的作品被剔掉后，用备选顶上仍能凑满 SEARCH_LIMIT 条。
+        pool = self.rank.search(keyword, limit=SEARCH_LIMIT + SEARCH_CANDIDATE_EXTRA)
+        if not pool:
             await event.send(event.plain_result(f"没有找到和「{keyword}」相关的作品。"))
             return
 
-        # 并发拿 UP主 名（失败的位置返回 None，降级为不显示）
-        views = await self.bili.get_views([row.get("bv", "") for row in rows])
+        # 并发拿 UP主 名（顺带把 duration 一起免费拿到；失败的位置返回 None）
+        pool_views = await self.bili.get_views([row.get("bv", "") for row in pool])
+
+        gate = self._duration_gate()
+        rows: list[dict] = []
+        views: list[dict | None] = []
+        for row, view in zip(pool, pool_views):
+            seconds = self._remember_duration(row.get("bv") or "", view)
+            if gate.enabled and not gate.allows(seconds):
+                logger.debug(
+                    "%s 搜索结果已剔除《%s》（%s 秒，超出 %s）",
+                    LOG_PREFIX,
+                    (row.get("title") or "")[:20],
+                    seconds,
+                    gate.describe(),
+                )
+                continue
+            rows.append(row)
+            views.append(view)
+            if len(rows) >= SEARCH_LIMIT:
+                break
+        self.duration.flush()
+
+        if not rows:
+            await event.send(
+                event.plain_result("没找到符合条件时长的作品，换个关键词试试。")
+            )
+            return
 
         lines = [f"模糊搜索前{len(rows)}个结果："]
         for index, (row, view) in enumerate(zip(rows, views), start=1):
             title = (row.get("title") or "未知作品").strip()
             up_name = (view or {}).get("up_name") or ""
             lines.append(f"{index}. {title}" + (f" - {up_name}" if up_name else ""))
-        lines.append(f"（60 秒内回复序号，或回复「取消」）")
+        lines.append("（60 秒内回复序号，或回复「取消」）")
         await event.send(event.plain_result("\n".join(lines)))
 
         from astrbot.core.utils.session_waiter import SessionController, session_waiter
@@ -335,12 +447,22 @@ class HachimitsuMusicPlugin(Star):
 
     # =============================================================== 投递主流程
 
-    async def _deliver(self, event: AstrMessageEvent, row: dict, view: dict | None = None) -> None:
-        """把一个榜单行变成语音消息发出去。所有拒绝都明确回复原因。"""
+    async def _deliver(
+        self,
+        event: AstrMessageEvent,
+        row: dict,
+        view: dict | None = None,
+        resample=None,
+    ) -> None:
+        """把一个榜单行变成语音消息发出去。所有拒绝都明确回复原因。
+
+        ``resample`` 是「换一首」的回调（返回新的榜单行或 ``None``）。
+        随机点歌会传它 —— 抽到超限 / 失效的作品时**静默换一首再试**，
+        用户全程无感（实测一次 ``view`` 仅 0.08 秒）。搜索点歌不传：
+        结果列表已经过滤过，用户点哪首就是哪首。
+        """
         group_id = event.get_group_id() or ""
         user_id = str(event.get_sender_id())
-        bv = row.get("bv") or ""
-        url = video_url(bv)
 
         # 熔断
         remaining = self.guard.circuit_remaining()
@@ -372,55 +494,134 @@ class HachimitsuMusicPlugin(Star):
             await event.send(event.plain_result(decision.message))
             return
 
+        preset = self._cfg_str("vocal_preset", "standard")
         timeout = self._cfg_int("limit", "task_timeout_seconds", 30)
-        try:
-            async with self.guard.slot(group_id):
-                await asyncio.wait_for(
-                    self._process(event, row, view, url, preset), timeout=timeout
-                )
-        except QueueFull as exc:
-            logger.debug("%s 队列已满：%s", LOG_PREFIX, exc)
-            await event.send(event.plain_result("现在排队的点歌太多了，请稍后再试。"))
-        except asyncio.TimeoutError:
-            await event.send(event.plain_result(f"这首歌处理超时（超过 {timeout} 秒），请再试一次。"))
-        except BiliRiskError as exc:
-            self.guard.trip_circuit(str(exc))
-            await event.send(
-                event.plain_result("B站 侧触发了风控，已暂停点歌 120 秒，请稍后再试。")
-            )
-        except NoAudioTrack as exc:
-            await event.send(event.plain_result(f"这首作品拿不到可用音频：{exc}"))
-        except AudioDownloadError as exc:
-            logger.warning("%s 音频下载失败：%s", LOG_PREFIX, exc)
-            await event.send(event.plain_result("音频下载失败了，请稍后再试。"))
-        except Exception as exc:  # noqa: BLE001 - 兜底，别让插件崩
-            from .core.utils import log_error
+        gate = self._duration_gate()
+        attempts = self._resample_attempts(resample, gate)
 
-            log_error(f"{LOG_PREFIX} 点歌流程异常", f"{type(exc).__name__}: {exc}")
-            await event.send(event.plain_result("点歌出错了，管理员可以查看日志了解详情。"))
+        current_row = row
+        current_view = view
+        for attempt in range(attempts):
+            current_bv = current_row.get("bv") or ""
+
+            # 去重：窗口内同曲直接复用缓存，不占配额
+            cached_mp3 = self.fetcher.mp3_path(current_bv, preset)
+            if (
+                self.guard.is_recent(current_bv)
+                and cached_mp3.exists()
+                and current_view is None
+            ):
+                logger.debug("%s 命中同曲去重窗口，直接复用缓存（%s）", LOG_PREFIX, current_bv)
+                await self._send_result(
+                    event, current_row, "", video_url(current_bv), cached_mp3
+                )
+                return
+
+            # 最后一次不再判时长：宁可放行一首长的，也不能让用户点歌失败。
+            # ⚠️ attempts == 1 时（搜索点歌 / 闸门未开）必须照常判定 ——
+            # 否则「换不了歌」的场景下闸门会整个失效。
+            enforce = not (attempts > 1 and attempt + 1 >= attempts)
+            try:
+                async with self.guard.slot(group_id):
+                    await asyncio.wait_for(
+                        self._process(event, current_row, current_view, preset, gate, enforce),
+                        timeout=timeout,
+                    )
+                return
+            except DurationRejected as exc:
+                logger.debug(
+                    "%s 已跳过《%s》—— %s（第 %d/%d 次）",
+                    LOG_PREFIX,
+                    (current_row.get("title") or "")[:20],
+                    exc.reason,
+                    attempt + 1,
+                    attempts,
+                )
+                picked = resample() if (resample is not None and attempt + 1 < attempts) else None
+                if not picked:
+                    # 换不到歌了（搜索点歌 / 次数用尽 / 榜单为空）→ 明确说一句，绝不静默
+                    await event.send(
+                        event.plain_result("这首作品暂时点不了（不合时长设置或稿件已失效），换一首试试。")
+                    )
+                    return
+                current_row = picked
+                current_view = None
+            except QueueFull as exc:
+                logger.debug("%s 队列已满：%s", LOG_PREFIX, exc)
+                await event.send(event.plain_result("现在排队的点歌太多了，请稍后再试。"))
+                return
+            except asyncio.TimeoutError:
+                await event.send(
+                    event.plain_result(f"这首歌处理超时（超过 {timeout} 秒），请再试一次。")
+                )
+                return
+            except BiliRiskError as exc:
+                self.guard.trip_circuit(str(exc))
+                await event.send(
+                    event.plain_result("B站 侧触发了风控，已暂停点歌 120 秒，请稍后再试。")
+                )
+                return
+            except NoAudioTrack as exc:
+                await event.send(event.plain_result(f"这首作品拿不到可用音频：{exc}"))
+                return
+            except AudioDownloadError as exc:
+                logger.warning("%s 音频下载失败：%s", LOG_PREFIX, exc)
+                await event.send(event.plain_result("音频下载失败了，请稍后再试。"))
+                return
+            except Exception as exc:  # noqa: BLE001 - 兜底，别让插件崩
+                from .core.utils import log_error
+
+                log_error(f"{LOG_PREFIX} 点歌流程异常", f"{type(exc).__name__}: {exc}")
+                await event.send(event.plain_result("点歌出错了，管理员可以查看日志了解详情。"))
+                return
 
     async def _process(
         self,
         event: AstrMessageEvent,
         row: dict,
         view: dict | None,
-        url: str,
         preset: str,
+        gate: DurationGate | None = None,
+        enforce_duration: bool = True,
     ) -> None:
-        """真正干活的部分：拿音轨 → 下载 → 转码 → 发送。"""
+        """真正干活的部分：拿时长 → 判闸门 → 拿音轨 → 下载 → 转码 → 发送。
+
+        时长闸门放在 **②**（``view`` 之后、``commit()`` 之前）是刻意的：
+        ``view`` 本来就必须走（要拿 ``cid``），响应里白送 ``duration``，
+        所以判时长**零额外请求**；而这时还没下载、没扣配额，被跳过的歌
+        既不产生流量也不占用户的每日额度。
+        """
         started = time.time()
         bv = row.get("bv") or ""
+        url = video_url(bv)
         group_id = event.get_group_id() or ""
         user_id = str(event.get_sender_id())
 
         # ① 稿件信息（顺带拿 cid；搜索结果里已经拿过就直接复用）
         if not view or not view.get("cid"):
-            view = await self.bili.get_view(bv)
+            try:
+                view = await self.bili.get_view(bv)
+            except BiliError as exc:
+                if exc.code in DEAD_VIEW_CODES:
+                    # 稿件没了（实测 1.7%）→ 记成失效，之后一并排除
+                    self.duration.mark_dead(bv)
+                    raise DurationRejected(bv, DEAD, "稿件不可见或已失效") from exc
+                raise
         cid = view.get("cid")
         if not cid:
-            raise BiliError("稿件信息里没有 cid")
+            self.duration.mark_dead(bv)
+            raise DurationRejected(bv, DEAD, "稿件信息里没有 cid")
 
-        # ② 音轨择优
+        # ② 时长闸门（零额外请求：duration 是 view 白送的）
+        seconds = self._remember_duration(bv, view)
+        if seconds is None:
+            self.duration.mark_dead(bv)
+            raise DurationRejected(bv, DEAD, "拿不到作品时长")
+        if enforce_duration and gate is not None and not gate.allows(seconds):
+            raise DurationRejected(bv, seconds, f"时长 {seconds} 秒超出允许范围（{gate.describe()}）")
+        self.duration.flush()
+
+        # ③ 音轨择优
         play = await self.bili.get_playurl(bv, cid)
         dash = play.get("dash") or {}
         want = self._cfg_str("audio_quality", "192k")
@@ -450,12 +651,12 @@ class HachimitsuMusicPlugin(Star):
         else:
             self.fetcher.touch(src_path)
 
-        # ⑤ 转码
+        # ⑥ 转码
         final_path, note = await transcode_to_mp3(src_path, preset, mp3_path)
         if note:
             logger.warning("%s %s", LOG_PREFIX, note)
 
-        # ⑥ 发送
+        # ⑦ 发送
         await self._send_result(event, row, view.get("up_name", ""), url, final_path)
         self.guard.mark_sent(bv)
         self._log_success(group_id, row, started, size=track_size(track))

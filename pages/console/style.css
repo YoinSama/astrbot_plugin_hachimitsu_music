@@ -211,11 +211,18 @@ button {
 }
 
 /* 表单 */
+/* 字段一律「标签在上、控件在下」：网格列宽只有 ~270px，横排时
+   「长标签(不换行) + 写死 160px 的输入框」最少要 ~350px，必然撑破格子 */
 .hm-field {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.hm-field .hm-field__label {
+  white-space: normal;
 }
 
 .hm-input {
@@ -245,8 +252,8 @@ button {
 
 .hm-field .hm-input,
 .hm-field select.hm-input {
-  width: 160px;
-  flex: 0 0 auto;
+  width: 100%;
+  flex: 1 1 auto;
 }
 
 /* 按钮 */
@@ -310,6 +317,31 @@ button {
   color: var(--c-text-dim);
   font-size: var(--fs-sm);
   padding: var(--space-3) 0;
+}
+
+/* 配置被自动纠正时的提示条（v1.2.0） */
+.hm-note {
+  margin: var(--space-3) 0 0;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-2, 8px);
+  border: 1px solid var(--c-warn);
+  background: var(--c-primary-weak);
+  color: var(--c-warn);
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+}
+
+.hm-note ul {
+  margin: var(--space-1) 0 0;
+  padding-left: 1.2em;
+}
+
+/* 卡片底部的小字说明 */
+.hm-tip {
+  margin: var(--space-3) 0 0;
+  color: var(--c-text-dim);
+  font-size: var(--fs-xs);
+  line-height: 1.7;
 }
 
 .hm-link {

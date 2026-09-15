@@ -8,7 +8,7 @@
 # ---------------------------------------------------------------- 插件元信息
 
 PLUGIN_NAME = "astrbot_plugin_hachimitsu_music"
-PLUGIN_VERSION = "v1.1.0"
+PLUGIN_VERSION = "v1.2.0"
 REPO_URL = "https://github.com/YoinSama/astrbot_plugin_hachimitsu_music"
 ISSUE_URL = f"{REPO_URL}/issues/new"
 LOG_PREFIX = "[哈基米音乐]"
@@ -91,3 +91,17 @@ VIDEO_URL_TEMPLATE = "https://www.bilibili.com/video/{bv}"
 
 # 搜索最多展示的结果数
 SEARCH_LIMIT = 5
+# 搜索时多取几条候选：超时的会被剔掉，用备选顶上，保证仍能凑满 SEARCH_LIMIT 条。
+# v1.2.0 —— get_views 是并发的，多取 3 条几乎不增加耗时（单次 view 实测 0.08s）。
+SEARCH_CANDIDATE_EXTRA = 3
+
+# ---------------------------------------------------------------- 作品时长限制（v1.2.0）
+
+# 最长时长默认值（秒）。max_seconds 填 0 / 无效值时回退到它 ——
+# 这是唯一不回退 1 的限制项：回退 1 会让几乎所有作品都被踢掉，等于插件不可用。
+DURATION_MAX_DEFAULT = 600
+# 抽到超限作品时最多换几首（用尽则放行最后一首，绝不阻塞点歌）
+DURATION_RESAMPLE_DEFAULT = 3
+# view 返回这些 code = 稿件没了（实测 1.7%：62012 / 62002 稿件不可见）。
+# 记成失效后一并排除，省下必然失败的点歌。
+DEAD_VIEW_CODES = {62002, 62004, 62012, -404}

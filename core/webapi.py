@@ -17,7 +17,13 @@ import asyncio
 import base64
 import io
 
-from .constants import LOG_PREFIX, PLUGIN_NAME, VOCAL_PRESETS
+from .constants import (
+    DURATION_MAX_DEFAULT,
+    DURATION_RESAMPLE_DEFAULT,
+    LOG_PREFIX,
+    PLUGIN_NAME,
+    VOCAL_PRESETS,
+)
 from .cookie_assist import CookieAssistError
 from .utils import humanize_ago, humanize_size, logger
 
@@ -104,8 +110,19 @@ class WebAPI:
                     "rank_refresh_hours": plugin._cfg_int("random", "rank_refresh_hours", 24),
                     "user_cooldown_seconds": plugin._cfg_int("limit", "user_cooldown_seconds", 30),
                     "group_daily_limit": plugin._cfg_int("limit", "group_daily_limit", 100),
+                    "min_seconds": plugin._cfg_int("duration", "min_seconds", 0),
+                    "max_seconds": plugin._cfg_int("duration", "max_seconds", DURATION_MAX_DEFAULT),
+                    "resample_max": plugin._cfg_int(
+                        "duration", "resample_max", DURATION_RESAMPLE_DEFAULT
+                    ),
                 },
                 "guard": guard,
+                "duration": {
+                    "gate": plugin._duration_gate().describe(),
+                    "known": plugin.duration.stats()["known"],
+                },
+                # 无效输入（填 0 / 非数字）已被自动纠正，前端展示成提示条
+                "corrected": plugin.corrections(),
                 "cache": {
                     "bytes": cache_bytes,
                     "text": humanize_size(cache_bytes),
@@ -141,31 +158,38 @@ class WebAPI:
             plugin.config["vocal_preset"] = preset
             changed.append(f"发送档位={preset}")
 
+        # (所属分组, 下限, 上限, 是否允许 -1 哨兵)
+        # v1.2.0：7 个限流项与 duration 的上下限都放开 -1 —— 否则填「不限制」会被这里挡下。
         numeric = {
-            "top_n": ("random", 1, 20000),
-            "top_weight": ("random", 0, 10000),
-            "style_weight": ("random", 0, 10000),
-            "rank_refresh_hours": ("random", 0, 720),
-            "user_cooldown_seconds": ("limit", 0, 86400),
-            "group_cooldown_seconds": ("limit", 0, 86400),
-            "user_daily_limit": ("limit", 0, 100000),
-            "group_daily_limit": ("limit", 0, 100000),
-            "global_per_minute": ("limit", 0, 100000),
-            "max_concurrency": ("limit", 1, 32),
-            "queue_max": ("limit", 1, 1000),
-            "task_timeout_seconds": ("limit", 5, 600),
-            "dedup_window_seconds": ("limit", 0, 86400),
-            "cache_max_mb": ("limit", 64, 102400),
+            "top_n": ("random", 1, 20000, False),
+            "top_weight": ("random", 0, 10000, False),
+            "style_weight": ("random", 0, 10000, False),
+            "rank_refresh_hours": ("random", 0, 720, False),
+            "user_cooldown_seconds": ("limit", -1, 86400, True),
+            "group_cooldown_seconds": ("limit", -1, 86400, True),
+            "user_daily_limit": ("limit", -1, 100000, True),
+            "group_daily_limit": ("limit", -1, 100000, True),
+            "global_per_minute": ("limit", -1, 100000, True),
+            "max_concurrency": ("limit", -1, 32, True),
+            "queue_max": ("limit", -1, 1000, True),
+            "task_timeout_seconds": ("limit", 5, 600, False),
+            "dedup_window_seconds": ("limit", 0, 86400, False),
+            "cache_max_mb": ("limit", 64, 102400, False),
+            "min_seconds": ("duration", -1, 86400, True),
+            "max_seconds": ("duration", -1, 86400, True),
+            "resample_max": ("duration", 1, 20, False),
         }
-        for key, (section, low, high) in numeric.items():
+        for key, (section, low, high, allow_sentinel) in numeric.items():
             if key not in payload:
                 continue
             try:
                 value = int(payload[key])
             except (TypeError, ValueError):
                 return error_response(f"{key} 必须是整数")
-            if not (low <= value <= high):
-                return error_response(f"{key} 必须在 {low}~{high} 之间")
+            if value == -1 and allow_sentinel:
+                pass  # 哨兵：该项限制不生效
+            elif not (low <= value <= high):
+                return error_response(f"{key} 必须在 {low}~{high} 之间" + ("（或填 -1 表示不限制）" if allow_sentinel else ""))
             bucket = plugin.config.get(section)
             if not isinstance(bucket, dict):
                 bucket = {}

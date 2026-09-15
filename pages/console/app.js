@@ -151,6 +151,34 @@ function renderConfig() {
   $("cfg-rank-hours").value = settings.rank_refresh_hours ?? "";
   $("cfg-user-cooldown").value = settings.user_cooldown_seconds ?? "";
   $("cfg-group-daily").value = settings.group_daily_limit ?? "";
+  $("cfg-min-seconds").value = settings.min_seconds ?? 0;
+  $("cfg-max-seconds").value = settings.max_seconds ?? 600;
+  $("cfg-resample-max").value = settings.resample_max ?? 3;
+
+  renderCorrected();
+}
+
+/** 把「无效输入已被自动纠正」展示成提示条，让管理员知道插件实际在用哪个值。 */
+function renderCorrected() {
+  const box = $("config-corrected");
+  if (!box) return;
+  const items = (state.status && state.status.corrected) || [];
+  box.textContent = "";
+  if (!items.length) {
+    box.hidden = true;
+    return;
+  }
+  box.hidden = false;
+  const title = document.createElement("div");
+  title.textContent = `有 ${items.length} 项配置填的值无效，插件已自动改成可用值：`;
+  box.append(title);
+  const ul = document.createElement("ul");
+  items.forEach((item) => {
+    const li = document.createElement("li");
+    li.textContent = `${item.key} —— ${item.message}`;
+    ul.append(li);
+  });
+  box.append(ul);
 }
 
 async function saveConfig() {
@@ -163,6 +191,9 @@ async function saveConfig() {
     rank_refresh_hours: Number($("cfg-rank-hours").value),
     user_cooldown_seconds: Number($("cfg-user-cooldown").value),
     group_daily_limit: Number($("cfg-group-daily").value),
+    min_seconds: Number($("cfg-min-seconds").value),
+    max_seconds: Number($("cfg-max-seconds").value),
+    resample_max: Number($("cfg-resample-max").value),
   };
   for (const [key, value] of Object.entries(payload)) {
     if (typeof value === "number" && !Number.isFinite(value)) {
@@ -171,13 +202,46 @@ async function saveConfig() {
     }
   }
   await guard(async () => {
-    await bridge.apiPost("config", payload);
-    toast("配置已保存", "ok");
+    const result = await bridge.apiPost("config", payload);
+    // 后端把填 0 / 非数字的值自动纠正了 —— 明确告诉管理员实际生效的值
+    const fixed = (result && result.corrected) || [];
+    if (fixed.length) {
+      toast(`已保存，但有 ${fixed.length} 项被自动纠正：${fixed[0].key} ${fixed[0].message}`, "err");
+    } else {
+      toast("配置已保存", "ok");
+    }
     await loadStatus();
   }, "正在保存配置…");
 }
 
 /* ------------------------------------------------------- ③ 配额管理 */
+
+/** 群头像 / QQ 头像的公开地址（实测可用：不存在也返回默认灰头像，不会 404）。 */
+function avatarUrl(scope, id) {
+  return scope === "groups"
+    ? `https://p.qlogo.cn/gh/${id}/${id}/100`
+    : `https://q1.qlogo.cn/g?b=qq&nk=${id}&s=100`;
+}
+
+/**
+ * 头像：先放真实头像，加载失败（离线 / 被风控 / CDN 抽风）时退化成首字圆圈，
+ * 不留空白块。
+ */
+function avatarBox(scope, id, label) {
+  const box = document.createElement("span");
+  box.className = "hm-avatar";
+  const img = document.createElement("img");
+  img.src = avatarUrl(scope, id);
+  img.alt = "";
+  img.loading = "lazy";
+  img.referrerPolicy = "no-referrer";
+  img.addEventListener("error", () => {
+    img.remove();
+    box.textContent = (label || id || "?").slice(0, 1);
+  });
+  box.append(img);
+  return box;
+}
 
 function quotaItem(entry, scope) {
   const wrap = document.createElement("label");
