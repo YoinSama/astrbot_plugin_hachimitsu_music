@@ -54,6 +54,7 @@ from .core.encoder import transcode_to_mp3
 from .core.guard import Guard, QueueFull
 from .core.limits import describe, resolve_bound, resolve_positive
 from .core.logging_noise import install_noise_filter
+from .core.names import NameBook
 from .core.quality import NoAudioTrack, pick_audio_track, track_size, track_url
 from .core.rank import RankStore, video_url
 from .core.utils import humanize_ago, humanize_size, plugin_data_dir
@@ -88,6 +89,8 @@ class HachimitsuMusicPlugin(Star):
         self.duration = DurationStore(data_dir / "duration.json")
         self.duration.load()
         self.guard = Guard(config, data_dir)
+        # 群名 / 昵称缓存：WebUI 配额列表用来把裸 ID 显示成人能看的名字
+        self.names = NameBook(data_dir)
         self.auth = AuthRuntime(config, data_dir)
         self.bili = BiliClient(timeout=30.0, max_concurrency=3)
         self.fetcher = AudioFetcher(data_dir / "audio", max_mb=self._cfg_int("limit", "cache_max_mb", 2048))
@@ -474,15 +477,6 @@ class HachimitsuMusicPlugin(Star):
             )
             return
 
-        # 去重：窗口内同曲直接复用缓存，不占配额
-        duplicate = self.guard.is_recent(bv)
-        preset = self._cfg_str("vocal_preset", "standard")
-        cached_mp3 = self.fetcher.mp3_path(bv, preset)
-        if duplicate and cached_mp3.exists() and view is None:
-            logger.debug("%s 命中同曲去重窗口，直接复用缓存（%s）", LOG_PREFIX, bv)
-            await self._send_result(event, row, "", url, cached_mp3)
-            return
-
         # 准入 + 限流
         decision = self.guard.check_access(group_id, user_id)
         if not decision.allowed:
@@ -629,6 +623,9 @@ class HachimitsuMusicPlugin(Star):
         if degrade:
             logger.warning("%s 音质降级 —— %s（实际 %s）", LOG_PREFIX, degrade, actual_quality)
 
+        # 顺手记下昵称与「这个人在哪个群点的歌」——零请求，供 WebUI 配额列表显示
+        self._remember_names(event, group_id, user_id)
+
         # 计数：只在实际开始处理时记
         self.guard.commit(group_id, user_id)
 
@@ -674,6 +671,22 @@ class HachimitsuMusicPlugin(Star):
         if not ok:
             logger.warning("%s 语音发送降级到「%s」：%s", LOG_PREFIX, channel, reason)
 
+    def _remember_names(self, event, group_id: str, user_id: str) -> None:
+        """把昵称 / 群-人映射记进名字簿（被动、零请求）。
+
+        任何异常都不允许影响点歌主流程 —— 名字只是 WebUI 的展示增强。
+        """
+        if not user_id:
+            return
+        try:
+            nickname = event.get_sender_name() if hasattr(event, "get_sender_name") else ""
+        except Exception:  # noqa: BLE001
+            nickname = ""
+        try:
+            self.names.remember_user(user_id, nickname, group_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("%s 记录昵称失败（不影响点歌）：%s", LOG_PREFIX, exc)
+
     def _log_success(self, group_id: str, row: dict, started: float, size: int = 0, cached: bool = False) -> None:
         elapsed = time.time() - started
         logger.info(
@@ -713,8 +726,10 @@ class HachimitsuMusicPlugin(Star):
                 if guard["circuit_remaining"]
                 else "正常"
             ),
-            f"队列　　　　{guard['waiting']} / {guard['queue_max']}",
+            f"队列　　　　{guard['waiting']} / {describe(guard['queue_max'])}",
             f"今日计数　　群 {guard['group_count']} 个 / 用户 {guard['user_count']} 个",
+            "时长限制　　"
+            + f"{self._duration_gate().describe()}（已记录 {self.duration.stats()['known']} 首）",
         ]
         return "\n".join(lines)
 

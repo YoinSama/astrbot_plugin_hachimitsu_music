@@ -380,7 +380,7 @@ button {
 }
 
 .hm-quota__list {
-  max-height: 240px;
+  max-height: 268px;
   overflow-y: auto;
   border: 1px solid var(--c-border);
   border-radius: var(--radius-sm);
@@ -392,22 +392,69 @@ button {
 
 .hm-quota-item {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: var(--space-2);
-  padding: 3px var(--space-2);
+  padding: 5px var(--space-2);
   border-radius: var(--radius-sm);
   font-size: var(--fs-sm);
+}
+
+/* 头像：优先真实群头像 / QQ 头像，加载失败时由 JS 退化成首字圆圈 */
+.hm-avatar {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--c-surface-2);
+  color: var(--c-text-dim);
+  font-size: var(--fs-xs);
+}
+
+.hm-avatar img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.hm-quota-item__main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.hm-quota-item__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hm-quota-item__id {
+  color: var(--c-text-dim);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
 }
 
 .hm-quota-item:hover {
   background: var(--c-surface-2);
 }
 
+/* 超长数值（比如上限 9999999999999）折到下一行右对齐，不挤压名称与 ID */
 .hm-quota-item__use {
   color: var(--c-text-dim);
   font-size: var(--fs-xs);
   font-variant-numeric: tabular-nums;
+  text-align: right;
+  flex: 0 0 auto;
+  max-width: 46%;
+  overflow-wrap: anywhere;
 }
 
 .hm-quota-item__use--full {
@@ -415,13 +462,40 @@ button {
 }
 
 /* 反馈条 */
+/* sticky 而不是 fixed：跟随滚动始终贴在视口顶部，
+   不管外层滚动容器是 iframe 还是 dashboard 面板都成立。
+   （原来是 static，滚到下面的卡片点按钮时提示跑到了视口外，等于没反馈） */
 .hm-toast {
+  position: sticky;
+  top: var(--space-2);
+  z-index: 30;
   display: none;
   padding: var(--space-3) var(--space-4);
   border-radius: var(--radius-md);
   border: 1px solid var(--c-border);
   background: var(--c-surface);
+  box-shadow: var(--shadow-2);
   font-size: var(--fs-sm);
+  animation: hm-toast-in 0.18s ease-out;
+}
+
+@keyframes hm-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+
+.hm-toast[data-kind="ok"]::before {
+  content: "✓ ";
+}
+
+.hm-toast[data-kind="err"]::before {
+  content: "✕ ";
+}
+
+.hm-toast[data-kind="busy"]::before {
+  content: "◌ ";
 }
 
 .hm-toast[data-kind="ok"] {
@@ -441,6 +515,55 @@ button {
 
 .hm-toast[data-show="1"] {
   display: block;
+}
+
+/* 二次确认面板（沙箱里 confirm() 失效，只能自己画） */
+.hm-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-4);
+  background: rgba(9, 10, 12, 0.62);
+}
+
+.hm-mask[hidden] {
+  display: none;
+}
+
+.hm-dialog {
+  width: min(400px, 100%);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-5);
+  box-shadow: var(--shadow-2);
+}
+
+.hm-dialog__title {
+  margin: 0 0 var(--space-2);
+  font-size: var(--fs-lg);
+  font-weight: 600;
+}
+
+.hm-dialog__body {
+  margin: 0;
+  color: var(--c-text-dim);
+  font-size: var(--fs-sm);
+  line-height: 1.7;
+}
+
+.hm-dialog__warn {
+  margin: var(--space-2) 0 0;
+  color: var(--c-danger);
+  font-size: var(--fs-sm);
+  line-height: 1.7;
+}
+
+.hm-dialog__warn[hidden] {
+  display: none;
 }
 
 /* 二维码面板 */

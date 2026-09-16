@@ -4,13 +4,14 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>哈基米音乐控制台</title>
+    <link rel="icon" href="./assets/logo.png" />
     <link rel="stylesheet" href="./style.css" />
   </head>
   <body>
     <main class="hm-wrap">
       <header class="hm-header">
         <div class="hm-header__icon" aria-hidden="true">
-          <img src="./assets/logo.svg" alt="" width="36" height="36" />
+          <img src="./assets/logo.png" alt="" width="36" height="36" />
         </div>
         <div>
           <h1 class="hm-title" id="page-title">哈基米音乐控制台</h1>
@@ -114,8 +115,10 @@
           <span class="hm-status__icon" aria-hidden="true">▤</span>
           <h2 class="hm-card__title" id="title-quota">配额管理</h2>
           <span class="hm-badge" id="quota-date">—</span>
+          <button class="hm-btn hm-btn--ghost" id="btn-refresh-quota" type="button">刷新</button>
+          <button class="hm-btn hm-btn--ghost" id="btn-refresh-names" type="button" title="重新拉取群名与 QQ 昵称">补全名称</button>
         </div>
-        <input class="hm-input hm-input--full" id="quota-filter" type="search" placeholder="输入群号或 QQ 号筛选…" />
+        <input class="hm-input hm-input--full" id="quota-filter" type="search" placeholder="输入群号 / QQ号 / 名称筛选…" />
         <div class="hm-quota">
           <div class="hm-quota__col">
             <div class="hm-quota__head">
@@ -167,6 +170,19 @@
         </div>
       </section>
     </main>
+
+    <!-- 二次确认面板：沙箱 iframe 里 confirm() 会被忽略，只能自建 -->
+    <div class="hm-mask" id="confirm-mask" hidden>
+      <div class="hm-dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
+        <h3 class="hm-dialog__title" id="confirm-title"></h3>
+        <p class="hm-dialog__body" id="confirm-body"></p>
+        <p class="hm-dialog__warn" id="confirm-warn" hidden></p>
+        <div class="hm-actions">
+          <button class="hm-btn" id="confirm-cancel" type="button">取消</button>
+          <button class="hm-btn hm-btn--danger" id="confirm-ok" type="button">确定</button>
+        </div>
+      </div>
+    </div>
 
     <script type="module" src="./app.js"></script>
   </body>

@@ -8,7 +8,7 @@
 # ---------------------------------------------------------------- 插件元信息
 
 PLUGIN_NAME = "astrbot_plugin_hachimitsu_music"
-PLUGIN_VERSION = "v1.2.0"
+PLUGIN_VERSION = "v1.2.1"
 REPO_URL = "https://github.com/YoinSama/astrbot_plugin_hachimitsu_music"
 ISSUE_URL = f"{REPO_URL}/issues/new"
 LOG_PREFIX = "[哈基米音乐]"

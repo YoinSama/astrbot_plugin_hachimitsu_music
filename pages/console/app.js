@@ -42,16 +42,77 @@ function busy(on, message) {
   if (message) toast(message, "busy");
 }
 
-/** 统一包装 bridge 调用：失败时把 Error 的 message 抛给调用方。 */
+/** 统一包装 bridge 调用：只负责「忙」提示，错误一律交给 runAction 弹。 */
 async function guard(fn, busyMessage) {
   if (busyMessage) toast(busyMessage, "busy");
+  return await fn();
+}
+
+/**
+ * 所有按钮的统一入口：禁用按钮防连点，并保证**任何**结果都有提示。
+ * 就算出现意料之外的异常也会弹红色提示，不会出现「点了没反应」。
+ */
+async function runAction(el, fn) {
+  if (state.busy) {
+    return;
+  }
+  state.busy = true;
+  if (el) {
+    el.disabled = true;
+  }
   try {
-    const result = await fn();
-    return result;
+    await fn();
   } catch (err) {
     toast(err && err.message ? err.message : String(err), "err");
-    throw err;
+  } finally {
+    state.busy = false;
+    if (el) {
+      el.disabled = false;
+    }
   }
+}
+
+/**
+ * 页面内二次确认面板。
+ *
+ * ⚠️ 不能用 window.confirm：插件页跑在沙箱 iframe 里（没有 allow-modals），
+ * 浏览器的 confirm 会被忽略**并且返回 false**，等于按钮直接失效。
+ */
+function ask({ title, body, warn = "", okText = "确定" }) {
+  return new Promise((resolve) => {
+    const mask = $("confirm-mask");
+    $("confirm-title").textContent = title;
+    $("confirm-body").textContent = body;
+    const warnEl = $("confirm-warn");
+    warnEl.textContent = warn;
+    warnEl.hidden = !warn;
+    const ok = $("confirm-ok");
+    ok.textContent = okText;
+    mask.hidden = false;
+
+    const done = (value) => {
+      mask.hidden = true;
+      ok.removeEventListener("click", onOk);
+      $("confirm-cancel").removeEventListener("click", onCancel);
+      mask.removeEventListener("click", onMask);
+      document.removeEventListener("keydown", onKey, true);
+      resolve(value);
+    };
+    // 焦点给「取消」：防手滑连按回车直接把缓存清了
+    const onOk = () => done(true);
+    const onCancel = () => done(false);
+    const onMask = (e) => {
+      if (e.target === mask) done(false);
+    };
+    const onKey = (e) => {
+      if (e.key === "Escape") done(false);
+    };
+    ok.addEventListener("click", onOk);
+    $("confirm-cancel").addEventListener("click", onCancel);
+    mask.addEventListener("click", onMask);
+    document.addEventListener("keydown", onKey, true);
+    $("confirm-cancel").focus();
+  });
 }
 
 function t(key, fallback) {
@@ -121,7 +182,13 @@ function renderStatus() {
       ? `${guard.circuit_remaining} 秒后解除（${guard.circuit_reason || "风控"}）`
       : "正常";
   list.append(row("上游熔断", circuit, guard.circuit_remaining > 0 ? "var(--c-warn)" : null));
-  list.append(row("队列", `${guard.waiting} / ${guard.queue_max}`));
+  // -1 = 哨兵，表示这项限制没开
+  const queueMax = guard.queue_max < 0 ? "不限制" : guard.queue_max;
+  list.append(row("队列", `${guard.waiting} / ${queueMax}`));
+  const duration = s.duration || {};
+  list.append(
+    row("时长限制", `${duration.gate || "不限制"}（已记录 ${duration.known ?? 0} 首）`)
+  );
   list.append(row("音频缓存", `${cache.text}（上限 ${cache.limit_mb} MB）`));
 
   // 全部风格池
@@ -253,21 +320,48 @@ function quotaItem(entry, scope) {
   box.type = "checkbox";
   box.dataset.scope = scope;
   box.dataset.id = entry.id;
+  left.append(box);
+
+  const main = document.createElement("span");
+  main.className = "hm-quota-item__main";
   const name = document.createElement("span");
-  name.textContent = entry.id;
-  left.append(box, name);
+  name.className = "hm-quota-item__name";
+  // 有名字显示名字，没有就退回 ID（后退方案，不影响功能）
+  name.textContent = entry.name || (scope === "groups" ? `群 ${entry.id}` : `QQ ${entry.id}`);
+  const idLine = document.createElement("span");
+  idLine.className = "hm-quota-item__id";
+  idLine.textContent = scope === "groups" ? `群 ${entry.id}` : `QQ ${entry.id}`;
+  main.append(name, idLine);
 
   const right = document.createElement("span");
   right.className = "hm-quota-item__use" + (entry.used >= entry.limit ? " hm-quota-item__use--full" : "");
   right.textContent = `${entry.used} / ${entry.limit}`;
 
-  wrap.append(left, right);
+  wrap.append(left, avatarBox(scope, entry.id, entry.name), main, right);
   return wrap;
 }
 
-function renderQuota() {
+function renderQuota({ keepState = false } = {}) {
   const filter = ($("quota-filter").value || "").trim();
-  const match = (entry) => !filter || String(entry.id).includes(filter);
+  // 支持按名称搜：ID / 昵称 / 群名 任一命中即可
+  const match = (entry) => {
+    if (!filter) return true;
+    return (
+      String(entry.id).includes(filter) ||
+      String(entry.name || "").toLowerCase().includes(filter.toLowerCase())
+    );
+  };
+
+  // 重绘前保留勾选与滚动位置：配额刷新 / 名称补全都不该把用户勾的一半冲掉
+  const saved = { checked: new Set(), scroll: {} };
+  if (keepState) {
+    document
+      .querySelectorAll('#quota-groups input[type="checkbox"]:checked, #quota-users input[type="checkbox"]:checked')
+      .forEach((el) => saved.checked.add(el.dataset.id));
+    ["quota-groups", "quota-users"].forEach((id) => {
+      saved.scroll[id] = $(id).scrollTop;
+    });
+  }
 
   const draw = (containerId, entries, scope) => {
     const box = $(containerId);
@@ -286,6 +380,18 @@ function renderQuota() {
   draw("quota-groups", state.quota.groups || [], "groups");
   draw("quota-users", state.quota.users || [], "users");
   $("quota-date").textContent = state.quota.date ? `统计日期 ${state.quota.date}` : "—";
+
+  if (keepState) {
+    saved.checked.forEach((id) => {
+      const box = document.querySelector(
+        `#quota-groups input[data-id="${id}"], #quota-users input[data-id="${id}"]`
+      );
+      if (box) box.checked = true;
+    });
+    ["quota-groups", "quota-users"].forEach((id) => {
+      if (typeof saved.scroll[id] === "number") $(id).scrollTop = saved.scroll[id];
+    });
+  }
 }
 
 function selectedIds(scope) {
@@ -301,18 +407,34 @@ async function resetSelected() {
     toast("请先勾选要重置的对象", "err");
     return;
   }
+  const ok = await ask({
+    title: "重置选中的配额",
+    body: `将清空已勾选的 ${groups.length + users.length} 个对象的今日点歌计数。`,
+    warn: "此操作不可撤销。",
+    okText: "确定重置",
+  });
+  if (!ok) {
+    return;
+  }
   await guard(async () => {
     const result = await bridge.apiPost("quota/reset", { groups, users });
-    toast(`已重置 ${result.cleared ?? 0} 项`, "ok");
+    toast(`已重置 ${result && result.cleared !== undefined ? result.cleared : 0} 项`, "ok");
     await loadQuota();
   }, "正在重置…");
 }
 
 async function resetAll() {
-  if (!window.confirm("确定要重置全部群与用户的配额计数吗？\n（不会清除上游熔断状态）")) return;
+  const ok = await ask({
+    title: "重置全部配额",
+    body: "将清空所有群与用户的今日点歌计数。",
+    warn: "此操作不可撤销（不会影响上游风控熔断状态）。",
+    okText: "确定重置",
+  });
+  if (!ok) return;
   await guard(async () => {
     const result = await bridge.apiPost("quota/reset", { all: true });
-    toast(`已重置全部配额（${result.cleared ?? 0} 项）`, "ok");
+    const cleared = result && result.cleared !== undefined ? result.cleared : 0;
+    toast(`已重置全部配额（${cleared} 项）`, "ok");
     await loadQuota();
   }, "正在重置…");
 }
@@ -348,7 +470,13 @@ async function refreshRank() {
 }
 
 async function clearCache() {
-  if (!window.confirm("确定要清空音频缓存吗？\n下次点歌需要重新下载与转码。")) return;
+  const ok = await ask({
+    title: "清空音频缓存",
+    body: "将删除已缓存的音频文件。",
+    warn: "下次点歌需要重新下载与转码，会慢一些。",
+    okText: "确定清空",
+  });
+  if (!ok) return;
   await guard(async () => {
     const result = await bridge.apiPost("cache/clear", {});
     toast(`已清空 ${result.files ?? 0} 个文件，释放 ${result.text ?? "0 B"}`, "ok");
@@ -429,8 +557,9 @@ async function watchAssistLogin() {
   loginPollTimer = setInterval(async () => {
     ticks += 1;
     if (ticks > 300) {
-      // 最多等 10 分钟，避免定时器无限挂着
+      // 最多等 10 分钟，避免定时器无限挂着 —— 但要明确告诉用户，不能无声停止
       stopLoginPoll();
+      toast("等待扫码超时（10 分钟内未检测到登录），已停止等待", "err");
       return;
     }
     try {
@@ -471,21 +600,36 @@ async function loadStatus() {
 
 async function loadQuota() {
   state.quota = (await guard(() => bridge.apiGet("quota/list"))) || state.quota;
-  renderQuota();
+  renderQuota({ keepState: true });
+}
+
+/** 「↻ 补全名称」：强制重新拉一次群名 / 昵称 */
+async function refreshNames() {
+  const result = await bridge.apiPost("names/refresh", {});
+  const filled = (result && result.filled) || 0;
+  await loadQuota();
+  toast(filled ? `已补全 ${filled} 项名称` : "没有需要补全的名称", filled ? "ok" : "busy");
 }
 
 /* ------------------------------------------------------------ 绑定 */
 
 function bindEvents() {
-  $("btn-refresh-status").addEventListener("click", () =>
-    guard(async () => {
+  // 所有按钮都走 runAction：禁用防连点 + 任何结果必定有提示
+  $("btn-refresh-status").addEventListener("click", (e) =>
+    runAction(e.currentTarget, async () => {
       await loadStatus();
       toast("状态已刷新", "ok");
     })
   );
-  $("btn-save-config").addEventListener("click", saveConfig);
+  $("btn-save-config").addEventListener("click", (e) => runAction(e.currentTarget, saveConfig));
+  $("btn-refresh-quota").addEventListener("click", (e) =>
+    runAction(e.currentTarget, async () => {
+      await loadQuota();
+      toast("配额数据已刷新", "ok");
+    })
+  );
 
-  $("quota-filter").addEventListener("input", renderQuota);
+  $("quota-filter").addEventListener("input", () => renderQuota());
   $("check-all-groups").addEventListener("change", (e) => {
     document
       .querySelectorAll('#quota-groups input[type="checkbox"]')
@@ -496,14 +640,15 @@ function bindEvents() {
       .querySelectorAll('#quota-users input[type="checkbox"]')
       .forEach((box) => (box.checked = e.target.checked));
   });
-  $("btn-reset-selected").addEventListener("click", resetSelected);
-  $("btn-reset-all").addEventListener("click", resetAll);
-  $("btn-reset-manual").addEventListener("click", resetManual);
+  $("btn-refresh-names").addEventListener("click", (e) => runAction(e.currentTarget, refreshNames));
+  $("btn-reset-selected").addEventListener("click", (e) => runAction(e.currentTarget, resetSelected));
+  $("btn-reset-all").addEventListener("click", (e) => runAction(e.currentTarget, resetAll));
+  $("btn-reset-manual").addEventListener("click", (e) => runAction(e.currentTarget, resetManual));
 
-  $("btn-rank-refresh").addEventListener("click", refreshRank);
-  $("btn-cache-clear").addEventListener("click", clearCache);
-  $("btn-bili-login").addEventListener("click", startLogin);
-  $("btn-request-login").addEventListener("click", requestLogin);
+  $("btn-rank-refresh").addEventListener("click", (e) => runAction(e.currentTarget, refreshRank));
+  $("btn-cache-clear").addEventListener("click", (e) => runAction(e.currentTarget, clearCache));
+  $("btn-bili-login").addEventListener("click", (e) => runAction(e.currentTarget, startLogin));
+  $("btn-request-login").addEventListener("click", (e) => runAction(e.currentTarget, requestLogin));
 }
 
 /* ------------------------------------------------------------ 启动 */
@@ -528,6 +673,7 @@ function bindEvents() {
   try {
     await Promise.all([loadStatus(), loadQuota()]);
   } catch (err) {
-    // guard 已经提示过了
+    // 首屏加载失败也必须让用户看得见（不然页面像卡住了）
+    toast(`控制台数据加载失败：${err && err.message ? err.message : err}`, "err");
   }
 })();

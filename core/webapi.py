@@ -56,6 +56,7 @@ class WebAPI:
             (f"{base}/cache/clear", self.api_cache_clear, ["POST"], "清空音频缓存"),
             (f"{base}/bili/login", self.api_bili_login, ["POST"], "发起 B站 扫码登录"),
             (f"{base}/bili/request", self.api_bili_request, ["POST"], "向管理员发起 B站 登录请求"),
+            (f"{base}/names/refresh", self.api_names_refresh, ["POST"], "强制重新拉取群名与昵称"),
         ]
         for route, handler, methods, desc in specs:
             context.register_web_api(route, handler, methods, desc)
@@ -212,14 +213,58 @@ class WebAPI:
         plugin.auth.reload_config(plugin.config)
         plugin.auth.mark_invalid("配置已保存，下次校验将重新确认 Cookie 状态")
         logger.info("%s 配置已通过控制台更新 —— %s", LOG_PREFIX, "，".join(changed))
-        return json_response({"changed": changed})
+        # 无效输入（填 0 / 非数字）已被自动纠正 —— 回给前端展示成提示条
+        return json_response({"changed": changed, "corrected": plugin.corrections()})
 
     # ------------------------------------------------------------- 配额
 
     async def api_quota_list(self) -> dict:
         from astrbot.api.web import json_response
 
-        return json_response(self._plugin.guard.snapshot())
+        snapshot = self._plugin.guard.snapshot()
+        await self._attach_names(snapshot)
+        return json_response(snapshot)
+
+    async def api_names_refresh(self) -> dict:
+        from astrbot.api.web import json_response
+
+        snapshot = self._plugin.guard.snapshot()
+        filled = await self._attach_names(snapshot, force=True)
+        logger.info("%s WebUI 手动刷新名称，补齐 %d 项", LOG_PREFIX, filled)
+        return json_response({"filled": filled})
+
+    async def _attach_names(self, snapshot: dict, *, force: bool = False) -> int:
+        """给配额快照里的每个 ID 补上名字（群名 / 昵称），原地修改。
+
+        补不全不影响其它字段：拿不到名字的行由前端退回显示 ID。
+        """
+        names = getattr(self._plugin, "names", None)
+        if names is None:
+            for entry in snapshot.get("groups", []):
+                entry.setdefault("name", "")
+            for entry in snapshot.get("users", []):
+                entry.setdefault("name", "")
+            return 0
+
+        group_ids = [entry.get("id") for entry in snapshot.get("groups", [])]
+        user_ids = [entry.get("id") for entry in snapshot.get("users", [])]
+        try:
+            filled = await names.fill(
+                self._plugin.context,
+                group_ids,
+                user_ids,
+                force=force,
+                groups_hint=group_ids,
+            )
+        except Exception as exc:  # noqa: BLE001 - 名称是展示增强，不该让配额接口失败
+            logger.debug("%s 补齐配额名称失败：%s", LOG_PREFIX, exc)
+            filled = 0
+
+        for entry in snapshot.get("groups", []):
+            entry["name"] = names.group_name(entry.get("id"))
+        for entry in snapshot.get("users", []):
+            entry["name"] = names.user_name(entry.get("id"))
+        return filled
 
     async def api_quota_reset(self) -> dict:
         from astrbot.api.web import error_response, json_response, request
