@@ -2,7 +2,7 @@
 
 # 哈基米音乐点歌插件
 [![Plugin Version](https://img.shields.io/badge/当前版本-v1.1.1-blue.svg?style=for-the-badge&color=76bad9)](https://github.com/YoinSama/astrbot_plugin_hachimitsu_music) [![AstrBot Version](https://img.shields.io/badge/AstrBot-%3E%3D4.27.2-orange.svg?style=for-the-badge)](https://github.com/AstrBotDevs/AstrBot) [![License](https://img.shields.io/badge/License-MIT-green.svg?style=for-the-badge)](LICENSE)
-![哈基米音乐点歌](logo_MAX.png)
+![哈基米音乐点歌](https://picture.yoinsama.com/file/1789514987665_logo_MAX.png)
 
 **一个基于 [AstrBot](https://github.com/AstrBotDevs/AstrBot) 的群聊点歌AI生成插件：从 [hajihami.com](https://hajihami.com) 的 B站播放量总榜里点歌，音频直接以语音消息发到群里。支持 OneBotv11（[SnowLuma](https://github.com/SnowLuma/SnowLuma)/ [NapCat（未测试）](https://github.com/NapNeko/NapCatQQ)）。**
 
