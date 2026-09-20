@@ -47,9 +47,11 @@ def log_error(scene: str, detail: str) -> None:
     logger.error(
         "%s：%s\n"
         "　报错时间：%s（本机时区）\n"
-        "　AstrBot 主日志：data/logs/astrbot.log —— 请查看该时间前后 1~3 分钟的记录\n"
+        "\u3000如何看日志：AstrBot WebUI \u2192 数据与日志 \u2192 日志（实时日志），或直接看启动控制台/标准输出\n"
+        "\u3000文件日志：AstrBot v4 默认不写日志文件（cmd_config.json 的 log_file_enable=false）；\n"
+        "\u3000\u3000开启后才会写入 log_file_path（默认 data/logs/astrbot.log），开启前该文件不存在/不更新\n"
         "　Docker 部署可改用：docker logs <容器名> --since %s\n"
-        "　若同时出现卡顿/CPU 异常，另附：data/logs/event_loop_watchdog.log\n"
+        "\u3000若开启文件日志且遇卡顿/CPU 异常，另附 data/logs/event_loop_watchdog.log\n"
         "　插件版本：%s\n"
         "　如需反馈，请到 %s 提交 issue，并附上以上报错信息与对应时段的日志。",
         scene,

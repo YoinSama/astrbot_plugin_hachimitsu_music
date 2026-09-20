@@ -562,6 +562,18 @@ class HachimitsuMusicPlugin(Star):
                 logger.warning("%s 音频下载失败：%s", LOG_PREFIX, exc)
                 await event.send(event.plain_result("音频下载失败了，请稍后再试。"))
                 return
+            except BiliError as exc:
+                # 非风控、非失效的 B站 接口错误（-503 繁忙 / -509 限流 /
+                # -688 地区限制 / -689 版权限制 / WBI 签名失败等）。明确告诉用户原因，
+                # 而不是落到兜底那句含糊的「点歌出错了」。注意 BiliRiskError 是子类，
+                # 已在上面的 except BiliRiskError 被先接住走熔断，不会到这儿。
+                logger.warning("%s B站 接口错误（code=%s）：%s", LOG_PREFIX, exc.code, exc)
+                await event.send(
+                    event.plain_result(
+                        f"B站 接口返回错误（code={exc.code}），这首暂时点不了，请稍后再试或换一首。"
+                    )
+                )
+                return
             except Exception as exc:  # noqa: BLE001 - 兜底，别让插件崩
                 from .core.utils import log_error
 
@@ -616,7 +628,15 @@ class HachimitsuMusicPlugin(Star):
         self.duration.flush()
 
         # ③ 音轨择优
-        play = await self.bili.get_playurl(bv, cid)
+        try:
+            play = await self.bili.get_playurl(bv, cid)
+        except BiliError as exc:
+            if exc.code in DEAD_VIEW_CODES:
+                # 稿件没法播（62012/62002 仅自己可见、-688 地区限制、-689 版权限制、-404 不存在）
+                # → 标 dead 后转成 DurationRejected，上层自动换一首 / 回「换一首试试」
+                self.duration.mark_dead(bv)
+                raise DurationRejected(bv, DEAD, "稿件不可见或已失效") from exc
+            raise
         dash = play.get("dash") or {}
         want = self._cfg_str("audio_quality", "192k")
         track, actual_quality, degrade = pick_audio_track(dash, want, self.auth.is_vip)

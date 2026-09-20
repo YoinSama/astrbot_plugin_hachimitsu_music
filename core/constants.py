@@ -8,7 +8,7 @@
 # ---------------------------------------------------------------- 插件元信息
 
 PLUGIN_NAME = "astrbot_plugin_hachimitsu_music"
-PLUGIN_VERSION = "v1.2.1"
+PLUGIN_VERSION = "v1.2.2"
 REPO_URL = "https://github.com/YoinSama/astrbot_plugin_hachimitsu_music"
 ISSUE_URL = f"{REPO_URL}/issues/new"
 LOG_PREFIX = "[哈基米音乐]"
@@ -102,6 +102,7 @@ SEARCH_CANDIDATE_EXTRA = 3
 DURATION_MAX_DEFAULT = 600
 # 抽到超限作品时最多换几首（用尽则放行最后一首，绝不阻塞点歌）
 DURATION_RESAMPLE_DEFAULT = 3
-# view 返回这些 code = 稿件没了（实测 1.7%：62012 / 62002 稿件不可见）。
-# 记成失效后一并排除，省下必然失败的点歌。
-DEAD_VIEW_CODES = {62002, 62004, 62012, -404}
+# view / playurl 返回这些 code = 稿件没法播，记成失效后一并排除，省下必然失败的点歌：
+#   62002 视频被隐藏 / 62004 审核中 / 62012 仅UP主本人可见（实测约 1.7%）
+#   -404 稿件不存在 / -688 地区限制 / -689 版权限制
+DEAD_VIEW_CODES = {62002, 62004, 62012, -404, -688, -689}

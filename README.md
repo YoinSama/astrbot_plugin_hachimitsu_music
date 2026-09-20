@@ -3,7 +3,7 @@
 # 哈基米音乐点歌插件
 
 <p align="center">
-  <a href="https://github.com/YoinSama/astrbot_plugin_hachimitsu_music"><img src="https://img.shields.io/badge/当前版本-v1.2.1-blue.svg?style=for-the-badge&color=76bad9" alt="当前版本 v1.2.1" /></a>&nbsp;<img src="https://img.shields.io/badge/AstrBot-%3E%3D4.27.2-orange.svg?style=for-the-badge" alt="AstrBot >= 4.27.2" />&nbsp;<a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green.svg?style=for-the-badge" alt="MIT License" /></a>
+  <a href="https://github.com/YoinSama/astrbot_plugin_hachimitsu_music"><img src="https://img.shields.io/badge/当前版本-v1.2.2-blue.svg?style=for-the-badge&color=76bad9" alt="当前版本 v1.2.2" /></a>&nbsp;<img src="https://img.shields.io/badge/AstrBot-%3E%3D4.27.2-orange.svg?style=for-the-badge" alt="AstrBot >= 4.27.2" />&nbsp;<a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green.svg?style=for-the-badge" alt="MIT License" /></a>
 </p>
 
 <img src="https://picture.yoinsama.com/file/1789514987665_logo_MAX.png" alt="哈基米音乐点歌" />
