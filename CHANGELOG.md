@@ -1,5 +1,15 @@
 # 更新日志
 
+## v1.2.2（2026-09-20）
+
+### 修复
+- 补全 B站 不可见稿件（code=62012）的错误处理：在 `get_playurl`（获取音轨）处补上 `BiliError` 捕获，命中失效稿件码时 `mark_dead` 并转 `DurationRejected`，由上层自动换一首 / 提示「换一首试试」，不再冒泡成含糊的「点歌出错了」。
+- `main.py` 的 `_deliver` 在大 `try` 的通用兜底前新增专门的 `except BiliError` 分支，给出带 code 的明确提示「B站 接口返回错误（code=xxx），这首暂时点不了，请稍后再试或换一首」。
+- `DEAD_VIEW_CODES` 由 4 个扩至 6 个（新增 `-688` 地区限制、`-689` 版权限制），同属永远无法播放的稿件，一并自动跳过。
+
+### 优化
+- `core/utils.py` 的报错日志路径指引改为版本无关写法：主推 WebUI 实时日志 / 启动控制台，并注明 AstrBot v4 默认不写日志文件（`log_file_enable=false`），避免误导用户去找不存在的 `data/logs/astrbot.log`。
+
 ## v1.2.1（2026-09-16）
 
 ### 新增
