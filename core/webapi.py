@@ -22,8 +22,11 @@ from .constants import (
     DURATION_RESAMPLE_DEFAULT,
     LOG_PREFIX,
     PLUGIN_NAME,
+    POOL_MAX_COUNT,
+    POOL_WEIGHT_NDIGITS,
     VOCAL_PRESETS,
 )
+from .rank import resolve_pool_weights
 from .cookie_assist import CookieAssistError
 from .utils import humanize_ago, humanize_size, logger
 
@@ -42,6 +45,14 @@ class WebAPI:
     @property
     def route_count(self) -> int:
         return len(self._routes)
+
+    def _random_section(self) -> dict:
+        """取 ``random`` 配置分组，顺手补出缺失的分组。"""
+        section = self._plugin.config.get("random")
+        if not isinstance(section, dict):
+            section = {}
+            self._plugin.config["random"] = section
+        return section
 
     # ------------------------------------------------------------- 注册
 
@@ -105,9 +116,12 @@ class WebAPI:
                     "preset": plugin.config.get("vocal_preset", "standard"),
                 },
                 "settings": {
+                    "pools": plugin._random_pools(),
+                    "pool_weights": plugin._random_manual(),
+                    # 后端算好的最终概率表：手动的固定，其余均分剩余。
+                    # 前端直接用它显示，避免前后端各算一套而对不上。
+                    "pool_plan": plugin._random_plan(),
                     "top_n": plugin._cfg_int("random", "top_n", 1000),
-                    "top_weight": plugin._cfg_int("random", "top_weight", 50),
-                    "style_weight": plugin._cfg_int("random", "style_weight", 10),
                     "rank_refresh_hours": plugin._cfg_int("random", "rank_refresh_hours", 24),
                     "user_cooldown_seconds": plugin._cfg_int("limit", "user_cooldown_seconds", 30),
                     "group_daily_limit": plugin._cfg_int("limit", "group_daily_limit", 100),
@@ -159,12 +173,50 @@ class WebAPI:
             plugin.config["vocal_preset"] = preset
             changed.append(f"发送档位={preset}")
 
+        pools = payload.get("pools")
+        if pools is not None:
+            if not isinstance(pools, list):
+                return error_response("随机池必须是数组")
+            cleaned: list[str] = []
+            for item in pools:
+                if not isinstance(item, str):
+                    continue
+                name = item.strip()
+                if name and name not in cleaned:
+                    cleaned.append(name)
+            if not cleaned:
+                return error_response("随机池至少要选一个")
+            if len(cleaned) > POOL_MAX_COUNT:
+                return error_response(f"随机池最多 {POOL_MAX_COUNT} 个")
+            self._random_section()["pools"] = cleaned
+            changed.append(f"随机池={len(cleaned)} 个")
+
+        weights = payload.get("pool_weights")
+        if weights is not None:
+            if not isinstance(weights, dict):
+                return error_response("随机池概率必须是对象")
+            # 本次也改了池子就按新的算，否则沿用已保存的
+            selected = cleaned if pools is not None else plugin._random_pools()
+            raw: dict[str, float] = {}
+            for key, value in weights.items():
+                if not isinstance(key, str) or not key.strip():
+                    continue
+                try:
+                    raw[key.strip()] = round(float(value), POOL_WEIGHT_NDIGITS)
+                except (TypeError, ValueError):
+                    continue
+            # 没勾选的池不保存（它压根不会被抽到，留着只会让人误会）
+            kept = {name: value for name, value in raw.items() if name in selected}
+            plan = resolve_pool_weights(selected, kept)
+            # 落盘 clamp 之后的值：配置文件里的数就是实际生效的数
+            final = {name: plan[name] for name in kept if name in plan}
+            self._random_section()["pool_weights"] = final
+            changed.append(f"随机池概率={len(final)} 项")
+
         # (所属分组, 下限, 上限, 是否允许 -1 哨兵)
         # v1.2.0：7 个限流项与 duration 的上下限都放开 -1 —— 否则填「不限制」会被这里挡下。
         numeric = {
             "top_n": ("random", 1, 20000, False),
-            "top_weight": ("random", 0, 10000, False),
-            "style_weight": ("random", 0, 10000, False),
             "rank_refresh_hours": ("random", 0, 720, False),
             "user_cooldown_seconds": ("limit", -1, 86400, True),
             "group_cooldown_seconds": ("limit", -1, 86400, True),

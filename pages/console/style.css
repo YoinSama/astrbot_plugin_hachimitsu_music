@@ -687,6 +687,178 @@ button {
   font-size: var(--fs-sm);
 }
 
+/* 随机池区块（v1.3.0）：勾选参与随机的池子，并可手动指定单个池的概率 */
+.hm-sub {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--c-primary);
+  border-radius: var(--radius-md);
+  background: var(--c-primary-weak);
+}
+
+.hm-sub__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.hm-sub__title {
+  flex: 1;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.hm-badge--warn {
+  color: var(--c-danger);
+  background: var(--c-danger-weak);
+}
+
+.hm-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.hm-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--c-text-dim);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+
+.hm-input--grow {
+  flex: 1 1 180px;
+}
+
+.hm-input--prob {
+  flex: 0 0 auto;
+  width: 78px;
+  padding: 0 var(--space-2);
+  text-align: right;
+}
+
+/* 概率条：深色块 = 手动指定，浅色块 = 系统自动均分 */
+.hm-prob {
+  display: flex;
+  gap: 2px;
+  height: 22px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--c-surface-2);
+}
+
+.hm-prob__seg {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--c-primary);
+  color: var(--c-primary-text);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.hm-pools {
+  max-height: 268px;
+  overflow-y: auto;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-sm);
+  background: var(--c-surface);
+  padding: var(--space-2);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.hm-pool {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 5px var(--space-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+}
+
+.hm-pool--on {
+  border-color: var(--c-primary);
+  background: var(--c-primary-weak);
+}
+
+.hm-pool__main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.hm-pool__name {
+  font-size: var(--fs-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hm-pool__count {
+  color: var(--c-text-dim);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.hm-pool__prob {
+  flex: 0 0 auto;
+  min-width: 52px;
+  text-align: right;
+  color: var(--c-primary);
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.hm-pool__unit {
+  flex: 0 0 auto;
+  color: var(--c-text-dim);
+  font-size: var(--fs-xs);
+}
+
+.hm-tag {
+  flex: 0 0 auto;
+  padding: 1px var(--space-2);
+  border-radius: 999px;
+  background: var(--c-surface-2);
+  color: var(--c-text-dim);
+  font-size: 11px;
+}
+
+.hm-tag--manual {
+  color: var(--c-primary);
+  background: var(--c-primary-weak);
+}
+
+.hm-iconbtn {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-sm);
+  background: var(--c-surface-2);
+  color: var(--c-text-dim);
+  font-size: var(--fs-xs);
+  line-height: 1;
+  cursor: pointer;
+}
+
+.hm-iconbtn:hover {
+  border-color: var(--c-primary);
+  color: var(--c-primary);
+}
+
 @media (max-width: 560px) {
   .hm-field {
     flex-direction: column;

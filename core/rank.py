@@ -19,9 +19,12 @@ from pathlib import Path
 from typing import Iterable
 
 from .constants import (
+    DEFAULT_POOLS,
     LOG_PREFIX,
+    POOL_MIN_WEIGHT,
+    POOL_TOP_LABEL,
+    POOL_WEIGHT_NDIGITS,
     STYLE_POOLS,
-    TOP_SOURCE,
     VIDEO_URL_TEMPLATE,
 )
 from .duration import DurationGate, DurationStore
@@ -41,6 +44,69 @@ def video_url(bv: str) -> str:
     ``share_source=copy_web``）。所以统一提取 BV 后重建标准链接。
     """
     return VIDEO_URL_TEMPLATE.format(bv=bv) if bv else ""
+
+
+def _round1(value: float) -> float:
+    return round(float(value), POOL_WEIGHT_NDIGITS)
+
+
+def _clamp(value: float, low: float, high: float) -> float:
+    """夹到 [low, high]。上限低于下限时取下限（说明空间已经被占满了）。"""
+    if high < low:
+        return low
+    return max(low, min(value, high))
+
+
+def resolve_pool_weights(
+    pools: "Iterable[str] | None", manual: dict | None = None
+) -> dict[str, float]:
+    """把「选中的池 + 手动指定的概率」算成一份完整的概率表（合计 100%）。
+
+    规则（前端用同一套公式做即时预览，所见即所得）：
+
+    - 在 ``manual`` 里的池按用户给的值**固定**，不参与剩余均分；
+    - 其余池平摊剩下的概率；
+    - 单池下限 ``POOL_MIN_WEIGHT``，总和不超 100% —— 超限的值自动压回当前
+      可填的最大值（压回时要给后面的每个池留 1% 保底）；
+    - 全部池都手动时，差额由列表里的最后一个池补齐，保证合计仍是 100%。
+    """
+    selected: list[str] = []
+    for name in pools or []:
+        if isinstance(name, str) and name and name not in selected:
+            selected.append(name)
+    if not selected:
+        return {}
+
+    manual = manual if isinstance(manual, dict) else {}
+    fixed = [name for name in selected if name in manual]
+    auto = [name for name in selected if name not in manual]
+    floor = POOL_MIN_WEIGHT
+    out: dict[str, float] = {}
+    used = 0.0
+
+    for index, name in enumerate(fixed):
+        # 给后面的池留够保底：剩下的手动池 + 全部自动池，各 1%
+        reserve = (len(fixed) - index - 1) * floor + len(auto) * floor
+        ceiling = _round1(100.0 - used - reserve)
+        try:
+            value = _round1(float(manual[name]))
+        except (TypeError, ValueError):
+            value = floor
+        out[name] = _clamp(value, floor, ceiling)
+        used = _round1(used + out[name])
+
+    if auto:
+        each = _round1((100.0 - used) / len(auto))
+        for name in auto:
+            out[name] = max(floor, each)
+        # 四舍五入会带来零点几的偏差，补回第一个自动池，让合计刚好是 100%
+        drift = _round1(100.0 - sum(out.values()))
+        if drift:
+            out[auto[0]] = max(floor, _round1(out[auto[0]] + drift))
+    elif fixed:
+        last = fixed[-1]
+        out[last] = max(floor, _round1(out[last] + (100.0 - sum(out.values()))))
+    return out
 
 
 class RankStore:
@@ -221,59 +287,65 @@ class RankStore:
     def pick_random(
         self,
         top_n: int = 1000,
-        top_weight: int = 50,
-        style_weight: int = 10,
+        pools: "Iterable[str] | None" = None,
+        weights: dict[str, float] | None = None,
         gate: DurationGate | None = None,
         store: DurationStore | None = None,
     ) -> dict | None:
-        """加权一次选出数据来源，再从该来源里随机取一首。
+        """按「随机池」取一首歌。
 
-        来源与权重：``[总榜, 风格1, 风格2, ...]`` → ``[top_weight, style_weight × 5]``。
-        默认 50 / 10 / 10 / 10 / 10 / 10，即总榜 50%、五个风格池各 10%。
+        ``pools`` 是勾选的池名（含 ``POOL_TOP_LABEL``），``weights`` 是
+        :func:`resolve_pool_weights` 算出的概率表。两者都为空时退回
+        ``DEFAULT_POOLS``，保证永远有歌可出。
 
-        用「加权一次选」而不是「先掷硬币决定走总榜还是风格池，再均分」是因为
-        两者概率完全相同，但前者每个来源的权重可以单独调，配置也更直观。
+        ``gate`` + ``store`` 都给时，会先排除已知超时长 / 已失效的作品。
+        三条兜底，**任何情况都不返回空**：
 
-        ``gate`` + ``store`` 都给时，会先排除已知超时长 / 已失效的作品
-        （方案 v3 §2.3）。过滤后池子若空了就**回退为不过滤**，绝不返回空。
+        1. 池内作品全被时长规则排除 → 该池回退为不过滤；
+        2. 选中的池当前取不到歌（名字打错 / 风格本期消失）→ 概率让给其它选中池；
+        3. 所有选中池都取不到歌 → 回退整榜。
         """
         if not self._rows:
             return None
 
-        sources = [TOP_SOURCE, *STYLE_POOLS]
-        weights = [max(0, int(top_weight))] + [max(0, int(style_weight))] * len(STYLE_POOLS)
-        if sum(weights) <= 0:  # 用户把权重全填 0 时兜底，避免 random.choices 报错
-            weights = [1] * len(sources)
-
-        source = random.choices(sources, weights=weights, k=1)[0]
-        if source != TOP_SOURCE:
-            candidates = self._style_index.get(source) or []
-            picked = self._eligible(candidates, gate, store)
-            if picked:
-                logger.debug(
-                    "%s 随机取源：命中风格池「%s」，候选 %d 首（过滤后 %d 首）",
-                    LOG_PREFIX,
-                    source,
-                    len(candidates),
-                    len(picked),
-                )
-                return self._rows[random.choice(picked)]
-            if candidates:
-                # 整个池子都被过滤掉了（极端配置）→ 回退，绝不返回空
-                logger.debug(
-                    "%s 风格池「%s」%d 首全部被时长规则排除，已回退为不过滤",
-                    LOG_PREFIX,
-                    source,
-                    len(candidates),
-                )
-                return self._rows[random.choice(candidates)]
-            # 池子空（例如解析出问题）时静默回退总榜，绝不返回空
-            logger.debug("%s 风格池「%s」当前为空，已回退总榜", LOG_PREFIX, source)
+        selected = [name for name in (pools or []) if isinstance(name, str) and name]
+        if not selected:
+            selected = list(DEFAULT_POOLS)
+        plan = weights if isinstance(weights, dict) and weights else resolve_pool_weights(selected)
 
         limit = max(1, min(int(top_n), len(self._rows)))
-        positions = range(limit)
-        picked = self._eligible(positions, gate, store) or list(positions)
-        return self._rows[random.choice(picked)]
+        candidates: dict[str, list[int]] = {}
+        for name in selected:
+            if name == POOL_TOP_LABEL:
+                positions = list(range(limit))
+            else:
+                positions = list(self._style_index.get(name) or [])
+            if not positions:
+                continue
+            kept = self._eligible(positions, gate, store) or positions
+            if kept:
+                candidates[name] = kept
+
+        if not candidates:
+            logger.debug("%s 选中的池子当前都取不到歌，已回退整榜", LOG_PREFIX)
+            positions = list(range(limit))
+            kept = self._eligible(positions, gate, store) or positions
+            return self._rows[random.choice(kept)] if kept else None
+
+        names = list(candidates)
+        odds = [max(0.0, float(plan.get(name, 0.0))) for name in names]
+        if sum(odds) <= 0:  # 概率表没覆盖到这些池（例如全是手输错的池名）→ 等分兜底
+            odds = [1.0] * len(names)
+
+        source = random.choices(names, weights=odds, k=1)[0]
+        logger.debug(
+            "%s 随机取源：命中「%s」（%.1f%%），候选 %d 首",
+            LOG_PREFIX,
+            source,
+            plan.get(source, 0.0),
+            len(candidates[source]),
+        )
+        return self._rows[random.choice(candidates[source])]
 
     def search(self, keyword: str, limit: int = 5) -> list[dict]:
         """模糊搜索：标题或 UP主 命中全部关键词即可。

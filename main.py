@@ -39,13 +39,17 @@ from .core.auth import AuthRuntime
 from .core.bili import BiliClient, BiliError, BiliRiskError
 from .core.constants import (
     DEAD_VIEW_CODES,
+    DEFAULT_POOLS,
     DURATION_MAX_DEFAULT,
     DURATION_RESAMPLE_DEFAULT,
     LOG_PREFIX,
     PLUGIN_NAME,
     PLUGIN_VERSION,
+    POOL_TOP_LABEL,
+    POOL_WEIGHT_NDIGITS,
     SEARCH_CANDIDATE_EXTRA,
     SEARCH_LIMIT,
+    STYLE_POOLS,
 )
 from .core.cookie_assist import CookieAssistant
 from .core.delivery import build_caption, send_voice
@@ -56,7 +60,7 @@ from .core.limits import describe, resolve_bound, resolve_positive
 from .core.logging_noise import install_noise_filter
 from .core.names import NameBook
 from .core.quality import NoAudioTrack, pick_audio_track, track_size, track_url
-from .core.rank import RankStore, video_url
+from .core.rank import RankStore, resolve_pool_weights, video_url
 from .core.utils import humanize_ago, humanize_size, plugin_data_dir
 from .core.webapi import WebAPI
 
@@ -97,6 +101,9 @@ class HachimitsuMusicPlugin(Star):
         self.cookie_assistant = CookieAssistant(self.auth, self.bili, data_dir)
         self.cookie_assistant.bind_context(context)
 
+        # v1.3.0：旧版「总榜权重 / 每风格权重」已换成随机池，这里做一次性换算
+        self._migrate_random_pools()
+
         self._webapi = WebAPI(self)
         self._register_web_apis()
 
@@ -115,15 +122,15 @@ class HachimitsuMusicPlugin(Star):
         # ① 配置
         quality = self.config.get("audio_quality", "192k")
         preset = self.config.get("vocal_preset", "standard")
-        top_weight = self._cfg_int("random", "top_weight", 50)
-        style_weight = self._cfg_int("random", "style_weight", 10)
+        pools = self._random_pools()
+        plan = self._random_plan()
+        pool_text = " · ".join(f"{name} {plan.get(name, 0.0)}%" for name in pools)
         logger.info(
-            "%s ① 读取配置完成 —— 下载音质=%s，发送档位=%s，随机权重=总榜%d/每风格%d",
+            "%s ① 读取配置完成 —— 下载音质=%s，发送档位=%s，随机池=%s",
             LOG_PREFIX,
             quality,
             preset,
-            top_weight,
-            style_weight,
+            pool_text,
         )
         # 无效输入（填 0 / 填了非数字）已被自动纠正，明确告诉管理员
         for item in self.corrections():
@@ -236,6 +243,89 @@ class HachimitsuMusicPlugin(Star):
     def _is_admin(self, user_id) -> bool:
         return str(user_id) in (self.auth.admin_ids() or [])
 
+    # ------------------------------------------------------- 随机池（v1.3.0）
+
+    def _random_pools(self) -> list[str]:
+        """勾选的池子（去重保序）。一个都没配 / 全是无效值时退回默认池。"""
+        raw = self._section("random").get("pools")
+        out: list[str] = []
+        if isinstance(raw, list):
+            for item in raw:
+                if isinstance(item, str) and item.strip() and item.strip() not in out:
+                    out.append(item.strip())
+        return out or list(DEFAULT_POOLS)
+
+    def _random_manual(self) -> dict[str, float]:
+        """手动指定过概率的池子。这里只做取整，合法区间交给 resolve 统一压回。"""
+        raw = self._section("random").get("pool_weights")
+        out: dict[str, float] = {}
+        if isinstance(raw, dict):
+            for key, value in raw.items():
+                if not isinstance(key, str) or not key.strip():
+                    continue
+                try:
+                    out[key.strip()] = round(float(value), POOL_WEIGHT_NDIGITS)
+                except (TypeError, ValueError):
+                    continue
+        return out
+
+    def _random_plan(self) -> dict[str, float]:
+        """最终概率表：手动的固定，其余均分剩下的。"""
+        return resolve_pool_weights(self._random_pools(), self._random_manual())
+
+    def _migrate_random_pools(self) -> None:
+        """把 v1.2.x 的「总榜权重 / 每风格权重」换算成随机池，**只跑一次**。
+
+        AstrBot 会自动移除 schema 里已不存在的旧配置项，那两项在面板上会自己
+        消失；这里只负责在它被移除**之前**把值接住，避免老用户升级后池子变空。
+        """
+        section = self.config.get("random") if hasattr(self.config, "get") else None
+        if not isinstance(section, dict):
+            section = {}
+            self.config["random"] = section
+        if isinstance(section.get("pools"), list) and section["pools"]:
+            return
+
+        old_top = self._cfg_int("random", "top_weight", 50)
+        old_style = self._cfg_int("random", "style_weight", 10)
+        pools: list[str] = []
+        if old_top > 0:
+            pools.append(POOL_TOP_LABEL)
+        if old_style > 0:
+            pools.extend(STYLE_POOLS)
+        if not pools:
+            pools = list(DEFAULT_POOLS)
+        section["pools"] = pools
+        try:
+            self.config.save_config()
+        except Exception as exc:  # noqa: BLE001 - 迁移失败不该阻断插件加载
+            logger.warning("%s 随机池迁移后保存配置失败（%s）", LOG_PREFIX, exc)
+        logger.info("%s 随机池已按旧权重迁移 —— %s", LOG_PREFIX, " · ".join(pools))
+
+    def _random_corrections(self) -> list[dict]:
+        """随机池里「填了但没按填的生效」的项，启动日志与 WebUI 提示条都会显示。"""
+        pools = self._random_pools()
+        manual = self._random_manual()
+        plan = resolve_pool_weights(pools, manual)
+        out: list[dict] = []
+        for name, value in manual.items():
+            key = f"random.pool_weights.{name}"
+            if name not in pools:
+                out.append({"key": key, "message": f"「{name}」没有勾选，已忽略"})
+                continue
+            actual = plan.get(name)
+            if actual is not None and abs(actual - value) > 0.05:
+                out.append(
+                    {
+                        "key": key,
+                        "message": (
+                            f"填的 {value}% 超出可填范围（单池最低 1%，"
+                            f"总和不超 100%），已按 {actual}% 计算"
+                        ),
+                    }
+                )
+        return out
+
     # ------------------------------------------------------- 时长规则（v1.2.0）
 
     def _duration_gate(self) -> DurationGate:
@@ -273,7 +363,11 @@ class HachimitsuMusicPlugin(Star):
 
     def corrections(self) -> list[dict]:
         """全部「无效输入已被自动纠正」的说明，供启动日志与 WebUI 提示条使用。"""
-        return [*self.guard.corrections, *self._duration_corrections()]
+        return [
+            *self.guard.corrections,
+            *self._duration_corrections(),
+            *self._random_corrections(),
+        ]
 
     def _remember_duration(self, bv: str, view: dict | None) -> int | None:
         """把 ``view`` 里白送的时长记进缓存并返回秒数。
@@ -347,11 +441,15 @@ class HachimitsuMusicPlugin(Star):
     async def _random_flow(self, event: AstrMessageEvent) -> None:
         gate = self._duration_gate()
 
+        # 每次点歌现取，所以 WebUI 改完随机池**立刻生效**，不用重载插件
+        pools = self._random_pools()
+        plan = self._random_plan()
+
         def _pick() -> dict | None:
             return self.rank.pick_random(
                 top_n=self._cfg_int("random", "top_n", 1000),
-                top_weight=self._cfg_int("random", "top_weight", 50),
-                style_weight=self._cfg_int("random", "style_weight", 10),
+                pools=pools,
+                weights=plan,
                 gate=gate,
                 store=self.duration,
             )

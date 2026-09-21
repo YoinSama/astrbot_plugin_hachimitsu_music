@@ -8,7 +8,7 @@
 # ---------------------------------------------------------------- 插件元信息
 
 PLUGIN_NAME = "astrbot_plugin_hachimitsu_music"
-PLUGIN_VERSION = "v1.2.2"
+PLUGIN_VERSION = "v1.3.0"
 REPO_URL = "https://github.com/YoinSama/astrbot_plugin_hachimitsu_music"
 ISSUE_URL = f"{REPO_URL}/issues/new"
 LOG_PREFIX = "[哈基米音乐]"
@@ -41,6 +41,19 @@ STYLE_POOLS = ["曼波好听～", "冰🧊！", "哈基周金曲", "原教旨主
 
 # 总榜的来源标识（加权随机时与 STYLE_POOLS 并列）
 TOP_SOURCE = "__top__"
+
+# ---------------------------------------------------------------- 随机池（v1.3.0）
+
+# 总榜在「随机池」配置里的字面量。用户要能在面板里手输，所以不用内部标识 __top__。
+POOL_TOP_LABEL = "总榜"
+# 单个池子的概率下限（%）。比它小一律按它算 —— 想彻底排除某个池就别勾选它。
+POOL_MIN_WEIGHT = 1.0
+# 概率保留几位小数。1 位 → 显示成 12.5% 这种。
+POOL_WEIGHT_NDIGITS = 1
+# 兜底池：配置项为空 / 全是无效值时退回它，保证点歌永远有歌可出。
+DEFAULT_POOLS = [POOL_TOP_LABEL, *STYLE_POOLS]
+# 最多能勾多少个池（只是防手输灌水，正常榜单风格标签远不到这个数）
+POOL_MAX_COUNT = 200
 
 # 启动自检基线：这些标签的数量级应当接近下表右列。
 # 若「本该有数据」的标签出现 0，说明 multi_select 解析出了问题（漏了 split(",")）。

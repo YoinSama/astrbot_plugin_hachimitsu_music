@@ -44,6 +44,27 @@
           <span class="hm-status__icon" aria-hidden="true">⚙</span>
           <h2 class="hm-card__title" id="title-config">常用配置</h2>
         </div>
+        <!-- 随机池：勾选哪些池参与随机，并可手动指定单个池的概率 -->
+        <div class="hm-sub" id="pool-box">
+          <div class="hm-sub__head">
+            <span class="hm-sub__title">随机池（可多选，至少选一个）</span>
+            <span class="hm-badge" id="pool-badge">—</span>
+          </div>
+          <div class="hm-prob" id="pool-bar"></div>
+          <div class="hm-row">
+            <input class="hm-input hm-input--grow" id="pool-filter" type="search" placeholder="搜索风格标签…" />
+            <span class="hm-inline">总榜前 <input class="hm-input hm-input--narrow" id="cfg-top-n" type="number" min="1" max="20000" /> 名</span>
+            <button class="hm-btn" id="btn-pool-all" type="button">全选</button>
+            <button class="hm-btn" id="btn-pool-default" type="button">恢复默认</button>
+          </div>
+          <div class="hm-pools" id="pool-list"></div>
+          <div class="hm-note" id="pool-note" hidden></div>
+          <p class="hm-tip">
+            深色块 = 你手动指定的概率，浅色块 = 系统自动均分剩下的。单池最低 <b>1%</b>、总和不超 <b>100%</b>，
+            填超了会自动压回当前可填的最大值。点 <b>✎</b> 改成手动，点 <b>×</b> 改回自动。
+          </p>
+        </div>
+
         <div class="hm-grid">
           <label class="hm-field">
             <span class="hm-field__label">下载音质</span>
@@ -61,18 +82,6 @@
               <option value="standard">标准（24kHz / 64k）</option>
               <option value="lite">省流（16kHz / 32k）</option>
             </select>
-          </label>
-          <label class="hm-field">
-            <span class="hm-field__label">总榜池前 N 名</span>
-            <input class="hm-input" id="cfg-top-n" type="number" min="1" max="20000" />
-          </label>
-          <label class="hm-field">
-            <span class="hm-field__label">总榜权重</span>
-            <input class="hm-input" id="cfg-top-weight" type="number" min="0" />
-          </label>
-          <label class="hm-field">
-            <span class="hm-field__label">每风格权重</span>
-            <input class="hm-input" id="cfg-style-weight" type="number" min="0" />
           </label>
           <label class="hm-field">
             <span class="hm-field__label">榜单刷新（小时）</span>

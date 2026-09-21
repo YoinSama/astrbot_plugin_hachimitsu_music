@@ -17,7 +17,18 @@ const state = {
   status: null,
   quota: { groups: [], users: [] },
   busy: false,
+  // 随机池：勾选了哪些池 / 手动指定的概率 / 后端算好的最终概率表
+  pools: [],
+  poolWeights: {},
+  poolPlan: {},
 };
+
+// 五个核心风格池（全角字符必须与榜单里的写法逐字节一致）
+const CORE_POOLS = ["曼波好听～", "冰🧊！", "哈基周金曲", "原教旨主义", "婉约派"];
+// 「恢复默认」用的池子，与后端 DEFAULT_POOLS 一致
+const DEFAULT_POOLS = ["总榜", ...CORE_POOLS];
+// 单个池子的概率下限（%），与后端 POOL_MIN_WEIGHT 一致
+const POOL_MIN = 1;
 
 // 扫码登录轮询定时器（登录成功后清除）
 let loginPollTimer = null;
@@ -155,7 +166,7 @@ function renderStatus() {
     )
   );
 
-  const corePools = ["曼波好听～", "冰🧊！", "哈基周金曲", "原教旨主义", "婉约派"];
+  const corePools = CORE_POOLS;
   list.append(
     row(
       "风格池规模",
@@ -204,6 +215,247 @@ function renderStatus() {
   renderConfig();
 }
 
+/* ------------------------------------------------------- ②b 随机池 */
+
+/**
+ * 概率表算法 —— 与后端 ``resolve_pool_weights`` **同一套公式**：
+ * 手动指定的池固定，其余池均分剩下的；单池最低 1%，超限自动压回。
+ * 两边保持一致，界面上看到的就是实际抽歌用的概率。
+ */
+function round1(value) {
+  return Math.round(Number(value) * 10) / 10;
+}
+
+function sumOf(obj) {
+  return Object.values(obj).reduce((total, item) => total + item, 0);
+}
+
+function fmtPct(value) {
+  return String(round1(value));
+}
+
+/** 池子清单：总榜在最前，其余按规模降序（后端 all_pools 已经是降序）。 */
+function poolCatalog() {
+  const rank = (state.status && state.status.rank) || {};
+  const list = [{ name: "总榜", size: rank.count || 0 }];
+  Object.entries(rank.all_pools || {}).forEach(([name, size]) => {
+    list.push({ name, size });
+  });
+  return list;
+}
+
+function poolPlan(names, manual) {
+  const fixed = names.filter((name) => manual[name] !== undefined);
+  const auto = names.filter((name) => manual[name] === undefined);
+  const out = {};
+  let used = 0;
+  fixed.forEach((name, index) => {
+    // 给后面的池留够保底：剩下的手动池 + 全部自动池，各 1%
+    const reserve = (fixed.length - index - 1) * POOL_MIN + auto.length * POOL_MIN;
+    const ceiling = Math.max(POOL_MIN, round1(100 - used - reserve));
+    let value = round1(manual[name]);
+    if (!Number.isFinite(value)) value = POOL_MIN;
+    out[name] = Math.max(POOL_MIN, Math.min(value, ceiling));
+    used = round1(used + out[name]);
+  });
+  if (auto.length) {
+    const each = round1((100 - used) / auto.length);
+    auto.forEach((name) => {
+      out[name] = Math.max(POOL_MIN, each);
+    });
+    const drift = round1(100 - sumOf(out));
+    if (drift) {
+      out[auto[0]] = Math.max(POOL_MIN, round1(out[auto[0]] + drift));
+    }
+  } else if (fixed.length) {
+    // 全部手动时由最后一个池补齐，保证合计仍是 100%
+    const last = fixed[fixed.length - 1];
+    out[last] = Math.max(POOL_MIN, round1(out[last] + (100 - sumOf(out))));
+  }
+  return out;
+}
+
+/** 某个池此刻最多能填到多少（其余每个池都要留 1% 保底）。 */
+function poolMaxFor(name) {
+  const fixed = state.pools.filter((item) => state.poolWeights[item] !== undefined);
+  const autoAfter =
+    state.pools.length - (fixed.length + (state.poolWeights[name] !== undefined ? 0 : 1));
+  const others = fixed
+    .filter((item) => item !== name)
+    .reduce((total, item) => total + Number(state.poolWeights[item]), 0);
+  return round1(100 - others - autoAfter * POOL_MIN);
+}
+
+function poolNote(text) {
+  const box = $("pool-note");
+  if (!box) return;
+  box.textContent = text || "";
+  box.hidden = !text;
+}
+
+function setPoolWeight(name, raw) {
+  const ceiling = Math.max(POOL_MIN, poolMaxFor(name));
+  let value = Number(raw);
+  if (!Number.isFinite(value)) value = ceiling;
+  value = round1(Math.min(ceiling, Math.max(POOL_MIN, value)));
+  if (Math.abs(value - round1(Number(raw))) > 0.05) {
+    const fixed = state.pools.filter((item) => state.poolWeights[item] !== undefined);
+    const autoAfter =
+      state.pools.length - (fixed.length + (state.poolWeights[name] !== undefined ? 0 : 1));
+    poolNote(
+      `「${name}」最多可填 ${fmtPct(ceiling)}%（其余 ${autoAfter} 个池各保底 1%），` +
+        `已自动调整为 ${fmtPct(value)}%`
+    );
+  } else {
+    poolNote("");
+  }
+  state.poolWeights[name] = value;
+  renderPools();
+}
+
+function renderPoolBar(plan) {
+  const bar = $("pool-bar");
+  bar.textContent = "";
+  state.pools.forEach((name) => {
+    const value = Number(plan[name] || 0);
+    const seg = document.createElement("div");
+    seg.className = "hm-prob__seg";
+    seg.style.flex = `0 0 ${value}%`;
+    seg.style.opacity = state.poolWeights[name] !== undefined ? "1" : "0.5";
+    if (value >= 7) seg.textContent = `${fmtPct(value)}%`;
+    bar.append(seg);
+  });
+}
+
+function updatePoolBadge() {
+  const badge = $("pool-badge");
+  const save = $("btn-save-config");
+  const manualNames = state.pools.filter((name) => state.poolWeights[name] !== undefined);
+  const autoNames = state.pools.filter((name) => state.poolWeights[name] === undefined);
+  if (!state.pools.length) {
+    badge.className = "hm-badge hm-badge--warn";
+    badge.textContent = "至少要选一个池子";
+    if (save) save.disabled = true;
+    return;
+  }
+  if (save) save.disabled = false;
+  badge.className = "hm-badge";
+  if (!autoNames.length) {
+    badge.textContent = `已选 ${state.pools.length} 个 · 全部手动 · 合计 ${fmtPct(
+      sumOf(state.poolPlan)
+    )}%`;
+    return;
+  }
+  // 一位小数时末尾那点偏差会补在第一个自动池上，均分不整除时展示区间，避免「每池 X%」产生歧义
+  const autoValues = autoNames.map((name) => Number(state.poolPlan[name] || 0));
+  const low = Math.min(...autoValues);
+  const high = Math.max(...autoValues);
+  const eachText =
+    low === high
+      ? `自动池每池 ${fmtPct(low)}%`
+      : `自动池每池 ${fmtPct(low)}%~${fmtPct(high)}%`;
+  badge.textContent = `已选 ${state.pools.length} 个 · 手动 ${manualNames.length} 个 · ${eachText}`;
+}
+
+function renderPools() {
+  const box = $("pool-list");
+  if (!box) return;
+  const keyword = ($("pool-filter").value || "").trim();
+  const plan = poolPlan(state.pools, state.poolWeights);
+  state.poolPlan = plan;
+
+  box.textContent = "";
+  const shown = poolCatalog().filter((pool) => !keyword || pool.name.indexOf(keyword) >= 0);
+  if (!shown.length) {
+    const empty = document.createElement("div");
+    empty.className = "hm-empty";
+    empty.textContent = "没有匹配的池子";
+    box.append(empty);
+  }
+
+  shown.forEach((pool) => {
+    const checked = state.pools.indexOf(pool.name) >= 0;
+    const row = document.createElement("div");
+    row.className = "hm-pool" + (checked ? " hm-pool--on" : "");
+
+    const check = document.createElement("input");
+    check.type = "checkbox";
+    check.checked = checked;
+    check.addEventListener("change", () => {
+      if (check.checked) {
+        if (state.pools.indexOf(pool.name) < 0) state.pools.push(pool.name);
+      } else {
+        state.pools = state.pools.filter((name) => name !== pool.name);
+        delete state.poolWeights[pool.name];
+      }
+      poolNote("");
+      renderPools();
+    });
+
+    const main = document.createElement("span");
+    main.className = "hm-pool__main";
+    const name = document.createElement("span");
+    name.className = "hm-pool__name";
+    name.textContent = pool.name;
+    const size = document.createElement("span");
+    size.className = "hm-pool__count";
+    size.textContent = `${(pool.size || 0).toLocaleString()} 首`;
+    main.append(name, size);
+    row.append(check, main);
+
+    if (!checked) {
+      box.append(row);
+      return;
+    }
+
+    if (state.poolWeights[pool.name] !== undefined) {
+      const input = document.createElement("input");
+      input.className = "hm-input hm-input--prob";
+      input.type = "number";
+      input.step = "0.1";
+      input.min = "1";
+      input.value = String(state.poolWeights[pool.name]);
+      input.addEventListener("change", () => setPoolWeight(pool.name, input.value));
+      const unit = document.createElement("span");
+      unit.className = "hm-pool__unit";
+      unit.textContent = "%";
+      const tag = document.createElement("span");
+      tag.className = "hm-tag hm-tag--manual";
+      tag.textContent = "手动";
+      const clear = document.createElement("button");
+      clear.className = "hm-iconbtn";
+      clear.type = "button";
+      clear.textContent = "×";
+      clear.title = "改回自动";
+      clear.addEventListener("click", () => {
+        delete state.poolWeights[pool.name];
+        poolNote("");
+        renderPools();
+      });
+      row.append(input, unit, tag, clear);
+    } else {
+      const value = document.createElement("span");
+      value.className = "hm-pool__prob";
+      value.textContent = `${fmtPct(plan[pool.name])}%`;
+      const tag = document.createElement("span");
+      tag.className = "hm-tag";
+      tag.textContent = "自动";
+      const edit = document.createElement("button");
+      edit.className = "hm-iconbtn";
+      edit.type = "button";
+      edit.textContent = "✎";
+      edit.title = "手动指定概率";
+      edit.addEventListener("click", () => setPoolWeight(pool.name, plan[pool.name]));
+      row.append(value, tag, edit);
+    }
+    box.append(row);
+  });
+
+  renderPoolBar(plan);
+  updatePoolBadge();
+  $("cfg-top-n").disabled = state.pools.indexOf("总榜") < 0;
+}
+
 /* ------------------------------------------------------- ② 常用配置 */
 
 function renderConfig() {
@@ -213,14 +465,18 @@ function renderConfig() {
   $("cfg-vocal-preset").value = s.quality.preset;
   const settings = s.settings || {};
   $("cfg-top-n").value = settings.top_n ?? "";
-  $("cfg-top-weight").value = settings.top_weight ?? "";
-  $("cfg-style-weight").value = settings.style_weight ?? "";
   $("cfg-rank-hours").value = settings.rank_refresh_hours ?? "";
   $("cfg-user-cooldown").value = settings.user_cooldown_seconds ?? "";
   $("cfg-group-daily").value = settings.group_daily_limit ?? "";
   $("cfg-min-seconds").value = settings.min_seconds ?? 0;
   $("cfg-max-seconds").value = settings.max_seconds ?? 600;
   $("cfg-resample-max").value = settings.resample_max ?? 3;
+
+  // 随机池：以后端算好的为准（保存后回传的就是实际生效的概率）
+  state.pools = Array.isArray(settings.pools) ? settings.pools.slice() : [];
+  state.poolWeights = Object.assign({}, settings.pool_weights || {});
+  state.poolPlan = Object.assign({}, settings.pool_plan || {});
+  renderPools();
 
   renderCorrected();
 }
@@ -253,15 +509,19 @@ async function saveConfig() {
     audio_quality: $("cfg-audio-quality").value,
     vocal_preset: $("cfg-vocal-preset").value,
     top_n: Number($("cfg-top-n").value),
-    top_weight: Number($("cfg-top-weight").value),
-    style_weight: Number($("cfg-style-weight").value),
     rank_refresh_hours: Number($("cfg-rank-hours").value),
     user_cooldown_seconds: Number($("cfg-user-cooldown").value),
     group_daily_limit: Number($("cfg-group-daily").value),
     min_seconds: Number($("cfg-min-seconds").value),
     max_seconds: Number($("cfg-max-seconds").value),
     resample_max: Number($("cfg-resample-max").value),
+    pools: state.pools.slice(),
+    pool_weights: Object.assign({}, state.poolWeights),
   };
+  if (!payload.pools.length) {
+    toast("随机池至少要选一个", "err");
+    return;
+  }
   for (const [key, value] of Object.entries(payload)) {
     if (typeof value === "number" && !Number.isFinite(value)) {
       toast(`「${key}」必须填数字`, "err");
@@ -628,6 +888,19 @@ function bindEvents() {
       toast("配额数据已刷新", "ok");
     })
   );
+
+  $("pool-filter").addEventListener("input", () => renderPools());
+  $("btn-pool-all").addEventListener("click", () => {
+    state.pools = poolCatalog().map((pool) => pool.name);
+    poolNote("");
+    renderPools();
+  });
+  $("btn-pool-default").addEventListener("click", () => {
+    state.pools = DEFAULT_POOLS.slice();
+    state.poolWeights = {};
+    poolNote("");
+    renderPools();
+  });
 
   $("quota-filter").addEventListener("input", () => renderQuota());
   $("check-all-groups").addEventListener("change", (e) => {
